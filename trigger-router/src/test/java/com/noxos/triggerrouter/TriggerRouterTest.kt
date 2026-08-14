@@ -16,8 +16,8 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowContentResolver
 import java.io.ByteArrayInputStream
 
 @RunWith(RobolectricTestRunner::class)
@@ -44,7 +44,7 @@ class TriggerRouterTest {
     @Test
     fun testScanFileSuccess() = runBlocking {
         val fileContent = "dummy_file_bytes"
-        ShadowContentResolver.registerInputStream(
+        shadowOf(context.contentResolver).registerInputStream(
             testUri,
             ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
         )
@@ -74,7 +74,7 @@ class TriggerRouterTest {
     @Test
     fun testScanFileFailure() = runBlocking {
         val fileContent = "dummy_file_bytes"
-        ShadowContentResolver.registerInputStream(
+        shadowOf(context.contentResolver).registerInputStream(
             testUri,
             ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
         )
