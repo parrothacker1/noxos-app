@@ -19,6 +19,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // ponytail: debug-keystore signing so release APKs are actually
+            // installable. Swap for a real signing config before real distribution.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
