@@ -26,4 +26,9 @@ Note: this project was scaffolded without a local Android SDK, so only `./gradle
 `./gradlew projects`-level structural validation was possible locally; the real build runs in CI
 (`.github/workflows/ci.yml`) on GitHub-hosted runners.
 
+## Icon
+
+Adaptive launcher icon (`res/mipmap-anydpi-v26/`, vector drawables) + legacy PNG fallbacks for
+API < 26. Source SVGs live in the root `noxos` repo under `assets/branding/`.
+
 Part of [NoxOS](https://github.com/parrothacker1/noxos). Status: skeleton only.
