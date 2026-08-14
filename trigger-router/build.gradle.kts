@@ -1,3 +1,6 @@
+import java.net.URL
+import java.util.Base64
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -34,10 +37,10 @@ val fetchAvfSystemStub by tasks.registering {
         val out = avfStubJar.get().asFile
         if (!out.exists()) {
             out.parentFile.mkdirs()
-            val b64 = java.net.URL(
+            val b64 = URL(
                 "https://android.googlesource.com/platform/prebuilts/sdk/+/refs/heads/main/35/system/android.jar?format=TEXT"
             ).readText()
-            out.writeBytes(java.util.Base64.getMimeDecoder().decode(b64))
+            out.writeBytes(Base64.getMimeDecoder().decode(b64))
         }
     }
 }
