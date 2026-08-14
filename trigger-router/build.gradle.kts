@@ -20,3 +20,16 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    implementation(project(":audit"))
+
+    // Coroutines
+    implementation(libs.kotlinx.coroutines.core)
+
+    // Unit tests
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+}
