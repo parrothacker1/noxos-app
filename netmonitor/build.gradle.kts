@@ -20,3 +20,7 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    implementation(project(":audit"))
+}
