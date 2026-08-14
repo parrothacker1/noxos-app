@@ -3,7 +3,11 @@ agp = "8.7.3"
 kotlin = "2.0.21"
 ksp = "2.0.21-1.0.28"
 room = "2.6.1"
-composeBom = "2026.08.00"
+# Pinned to the newest BOM whose androidx.compose.ui:ui is still 1.7.x.
+# Anything newer (e.g. 2026.08.00 -> ui 1.12.0) requires AGP 9.1.0+ /
+# compileSdk 37 and will fail the build under this project's AGP 8.7.3 /
+# compileSdk 35 pin. Bump agp+compileSdk together with this if you need to.
+composeBom = "2024.10.01"
 activityCompose = "1.9.1"
 lifecycleCompose = "2.8.4"
 coroutines = "1.8.1"
