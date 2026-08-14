@@ -126,7 +126,7 @@ fun HomeScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("NoxOS Secure Workspace") })
+            TopAppBar(title = { Text("Warden") })
         }
     ) { innerPadding ->
         Column(

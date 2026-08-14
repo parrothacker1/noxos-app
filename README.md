@@ -18,7 +18,7 @@
 
 ## Overview
 
-`noxos-app` is the host-side Android app that drives NoxOS's core security feature. It lets users pick untrusted files, routes them into a disposable Microdroid virtual machine for isolated processing, and records every execution in a local audit database.
+`noxos-app` is the host-side Android app — branded **Warden** — that drives NoxOS's core security feature. It lets users pick untrusted files, routes them into a disposable Microdroid virtual machine for isolated processing, and records every execution in a local audit database.
 
 The app is built as a **multi-module Gradle project** (Kotlin DSL, version catalog) with clean separation between the isolation trigger, the network monitor, and the audit persistence layer.
 

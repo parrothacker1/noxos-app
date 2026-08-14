@@ -57,7 +57,7 @@ class NetMonitorService : VpnService() {
         startForeground(NOTIFICATION_ID, buildNotification())
 
         val builder = Builder()
-            .setSession("NoxOS Network Monitor")
+            .setSession("Warden Network Monitor")
             .addAddress("10.0.0.1", 32)
             .addRoute("0.0.0.0", 0)
 
@@ -161,14 +161,14 @@ class NetMonitorService : VpnService() {
     private fun buildNotification(): Notification {
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
-            "NoxOS Network Monitor",
+            "Warden Network Monitor",
             NotificationManager.IMPORTANCE_LOW
         )
         getSystemService(NotificationManager::class.java)
             .createNotificationChannel(channel)
 
         return Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("NoxOS Network Monitor")
+            .setContentTitle("Warden Network Monitor")
             .setContentText("Monitoring network traffic for untrusted flows")
             .setSmallIcon(android.R.drawable.ic_menu_manage)
             .setOngoing(true)
