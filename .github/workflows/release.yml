@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # ponytail: no signing config exists yet (this app ships signed inside
+      # the OS image eventually, not as a standalone Play-style release) —
+      # release APKs here are unsigned until that infra exists.
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            app/build/outputs/apk/release/*.apk \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
