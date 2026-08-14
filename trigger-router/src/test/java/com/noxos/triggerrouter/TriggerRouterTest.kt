@@ -1,8 +1,6 @@
 package com.noxos.triggerrouter
 
-import android.content.ContentResolver
 import android.content.Context
-import android.content.ContextWrapper
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.noxos.audit.AuditEvent
@@ -19,8 +17,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowContentResolver
 import java.io.ByteArrayInputStream
-import java.io.InputStream
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -32,21 +30,10 @@ class TriggerRouterTest {
     private lateinit var sessionFactory: FakeVmSessionFactory
     private lateinit var router: TriggerRouter
     private val testUri = Uri.parse("content://test/file.jpg")
-    private var fileStreamToReturn: java.io.InputStream? = null
 
     @Before
     fun setUp() {
-        val baseContext = ApplicationProvider.getApplicationContext<Context>()
-        context = object : ContextWrapper(baseContext) {
-            private val resolver = object : ContentResolver(baseContext) {
-                override fun openInputStream(uri: Uri): InputStream? {
-                    return fileStreamToReturn
-                }
-            }
-            override fun getContentResolver(): ContentResolver {
-                return resolver
-            }
-        }
+        context = ApplicationProvider.getApplicationContext()
 
         auditRepository = FakeAuditRepository()
         transport = FakeVmTransport()
@@ -57,7 +44,10 @@ class TriggerRouterTest {
     @Test
     fun testScanFileSuccess() = runBlocking {
         val fileContent = "dummy_file_bytes"
-        fileStreamToReturn = ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
+        ShadowContentResolver.registerInputStream(
+            testUri,
+            ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
+        )
 
         val jsonResponse = JSONObject().put("make", "Google").put("model", "Pixel 9").toString()
         val jsonBytes = jsonResponse.toByteArray(Charsets.UTF_8)
@@ -84,7 +74,10 @@ class TriggerRouterTest {
     @Test
     fun testScanFileFailure() = runBlocking {
         val fileContent = "dummy_file_bytes"
-        fileStreamToReturn = ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
+        ShadowContentResolver.registerInputStream(
+            testUri,
+            ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
+        )
 
         val errMessage = "Corrupt EXIF header"
         val errBytes = errMessage.toByteArray(Charsets.UTF_8)
