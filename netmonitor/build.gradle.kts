@@ -23,4 +23,7 @@ android {
 
 dependencies {
     implementation(project(":audit"))
+
+    // Coroutines
+    implementation(libs.kotlinx.coroutines.core)
 }
