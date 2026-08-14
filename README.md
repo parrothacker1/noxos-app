@@ -115,6 +115,8 @@ TriggerRouter.scanFile(uri)
 ```
 
 > **AVF seam note:** `MicrodroidVmSession` and `VsockVmTransport` are written against documented-but-unconfirmed AVF Java APIs. They are explicitly flagged in-code and will be verified in Phase 2 on real Cuttlefish hardware.
+>
+> **This is currently a compile-time blocker, not just a runtime-unverified one.** CI confirmed `VirtualMachine`/`VirtualMachineManager`/`VirtualMachineConfig` aren't present in the standard `compileSdk 35` public SDK jar — these are system/hidden APIs. Whether a compileOnly stub artifact exists, or this module needs to be built inside an AOSP tree instead of a plain Gradle project, is unresolved. See `knowledge-graph/TASKS.md` for the open question.
 
 ---
 
