@@ -3,7 +3,7 @@ package com.noxos.triggerrouter.protocol
 import java.nio.ByteBuffer
 
 object VmPayloadProtocol {
-    const val VSOCK_PORT = 5000
+    const val VSOCK_PORT = 5000L
 
     fun encodeRequest(fileBytes: ByteArray): ByteArray {
         val buffer = ByteBuffer.allocate(4 + fileBytes.size)

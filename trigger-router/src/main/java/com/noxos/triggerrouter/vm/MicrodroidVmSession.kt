@@ -38,8 +38,12 @@ class RealVmSessionFactory : VmSessionFactory {
         val vmm = context.getSystemService(VirtualMachineManager::class.java)
             ?: throw IllegalStateException("VirtualMachineManager not supported on this device")
         
-        val config = VirtualMachineConfig.Builder(context, "vm_config.json")
-            .setProtected(false)
+        // API 35's Builder has no (Context, path) ctor — vm_config.json (the Microdroid
+        // payload manifest) is a guest-side asset convention, not parsed by this Java API.
+        // Payload binary name is set explicitly instead; see knowledge-graph/TASKS.md.
+        val config = VirtualMachineConfig.Builder(context)
+            .setPayloadBinaryName("libnoxos_payload_stub.so")
+            .setProtectedVm(false)
             .build()
         
         val vmName = "noxos-scan-${UUID.randomUUID()}"
