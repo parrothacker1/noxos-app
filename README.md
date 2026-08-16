@@ -18,45 +18,48 @@
 
 ## Overview
 
-`noxos-app` is the host-side Android app — branded **Warden** — that drives NoxOS's core security feature. It lets users pick untrusted files, routes them into a disposable Microdroid virtual machine for isolated processing, and records every execution in a local audit database.
+`noxos-app` is the host-side Android app — branded **Warden** — that drives NoxOS's core security feature. It lets users pick untrusted files, routes them into a disposable Microdroid virtual machine for isolated processing, records every execution in a local audit database, and enforces a real per-IP blocklist on the network side.
 
-The app is built as a **multi-module Gradle project** (Kotlin DSL, version catalog) with clean separation between the isolation trigger, the network monitor, and the audit persistence layer.
+The app is built as a **multi-module Gradle project** (Kotlin DSL, version catalog) with clean separation between the isolation trigger, the network monitor, and the shared data layer (audit trail, blocked hosts, settings, design system).
+
+Visual design (dark-first, navy/teal, Archivo + JetBrains Mono, a dashed-circle-and-dot "containment mark" motif reused across screens) follows a redesign delivered 2026-08-16 — see `knowledge-graph/TASKS.md` for the session log and every place a mockup detail was deliberately simplified rather than faked with data the app doesn't actually have (no fabricated TLS/threat-intel detection, no invented file hashes or byte counters).
 
 ---
 
 ## Module Architecture
 
 ```
-┌──────────────────────────────────────────────┐
-│                    :app                      │
-│  MainActivity · HomeScreen · SAF file picker │
-│  VPN permission flow · navigation            │
-└────────┬─────────────┬──────────────┬────────┘
-         │             │              │
-         ▼             ▼              ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────────────┐
-│:trigger-     │ │ :netmonitor  │ │       :audit         │
-│ router       │ │              │ │                      │
-│              │ │ VpnService   │ │ AuditEvent domain    │
-│ TriggerRouter│ │ capture loop │ │ AuditRepository      │
-│ VmSession    │ │ IPv4 flow    │ │ Room DB / DAO        │
-│ VsockTransport│ │ descriptor   │ │ AuditListScreen      │
-│ Protocol     │ │ logging      │ │ AuditDetailScreen    │
-│ ScanResult   │ │              │ │                      │
-└──────┬───────┘ └──────┬───────┘ └──────────────────────┘
-       │                │
-       └────────────────┘
-              depends on :audit
+┌──────────────────────────────────────────────────────┐
+│                        :app                          │
+│  MainActivity · HomeScreen · SAF file/export pickers │
+│  VPN + notification permission flows · navigation    │
+└────────┬─────────────┬───────────────┬───────────────┘
+         │             │               │
+         ▼             ▼               ▼
+┌──────────────┐ ┌──────────────┐ ┌────────────────────────────────┐
+│:trigger-     │ │ :netmonitor  │ │            :audit               │
+│ router       │ │              │ │                                  │
+│              │ │ VpnService   │ │ AuditEvent/BlockedHost domain   │
+│ TriggerRouter│ │ capture loop │ │ Room DB / DAO (audit + hosts)   │
+│ ScanProgress │ │ UDP relay    │ │ WardenSettingsRepository        │
+│ VmSession    │ │ blocklist    │ │  (DataStore: theme, vm timeout, │
+│ VsockTransport│ │ enforcement  │ │   alerts, retention)            │
+│ Protocol     │ │ (via :audit) │ │ AuditExport (JSON via SAF)      │
+│ ScanResult   │ │              │ │ theme/ — WardenTheme, Containment│
+└──────┬───────┘ └──────┬───────┘ │  Mark, colors/type              │
+       │                │         │ List/Detail/BlockedHosts/       │
+       └────────────────┴────────▶│  Settings Compose screens       │
+              depends on :audit    └──────────────────────────────────┘
 ```
 
 ### Module Responsibilities
 
 | Module | Responsibility |
 |--------|---------------|
-| **`:app`** | Composition root, `MainActivity` (`ComponentActivity`), Compose nav between Home / Audit screens, VPN permission launcher, SAF file picker |
-| **`:trigger-router`** | `TriggerRouter` — reads file bytes, spawns VM session, sends/receives vsock frames, parses JSON result, records audit event |
-| **`:netmonitor`** | `NetMonitorService` — `VpnService` subclass, TUN capture loop, IPv4 flow descriptor extraction, audit logging. `NetMonitor` — controller managing start/stop |
-| **`:audit`** | `AuditEvent`/`AuditRepository` domain types, Room entity/DAO/database, `RoomAuditRepository`, `AuditModule.create()` factory, Compose list + detail screens |
+| **`:app`** | Composition root, `MainActivity` (`ComponentActivity`), Compose nav across Home / Audit / Blocked Hosts / Settings, VPN + `POST_NOTIFICATIONS` permission launchers, SAF file picker, scan-completion notifications |
+| **`:trigger-router`** | `TriggerRouter` — reads file bytes, spawns VM session, sends/receives vsock frames, parses JSON result, records audit event. Publishes live `ScanProgress` (boot/execute/sanitize/destroy, real per-step timings) as a `StateFlow`; scans are cancellable and the VM is always torn down (`use{}`) even on cancel. VM session timeout is read from `WardenSettingsRepository`, not hardcoded |
+| **`:netmonitor`** | `NetMonitorService` — `VpnService` subclass, TUN capture loop, real UDP relay through a protected per-client socket, blocked-host enforcement (checks the live blocklist before relaying, logs `BLOCKED` instead of `SUCCESS` when it drops a packet), throttled audit logging. `NetMonitor` — controller managing start/stop, exposes a live connections-inspected counter |
+| **`:audit`** | The shared leaf module — domain types (`AuditEvent`, `BlockedHost`), Room entities/DAOs/database (`audit_entries` + `blocked_hosts`), repositories (`RoomAuditRepository`, `RoomBlockedHostRepository`), `WardenSettingsRepository` (DataStore-backed: theme mode, VM timeout, alert toggles, retention days), `AuditExport` (JSON export helper), `RetentionPolicy` (pure cutoff-date math), list filtering/date-bucketing/severity helpers, the `theme/` package (`WardenTheme`, `ContainmentMark`, color/type tokens, bundled Archivo + JetBrains Mono fonts), and every Compose screen except Home (List, Detail, Blocked Hosts, Settings) |
 
 ---
 
@@ -114,9 +117,9 @@ TriggerRouter.scanFile(uri)
      └─ AuditRepository.record(AuditEvent)
 ```
 
-> **AVF seam note:** `MicrodroidVmSession` and `VsockVmTransport` are written against documented-but-unconfirmed AVF Java APIs. They are explicitly flagged in-code and will be verified in Phase 2 on real Cuttlefish hardware.
+> **AVF seam note:** `MicrodroidVmSession` and `VsockVmTransport` are written against documented-but-unconfirmed AVF Java APIs. Compiles clean (resolved 2026-08-15 via a `compileOnly` system-API stub jar, see `knowledge-graph/TASKS.md`), but the actual runtime behavior is still unverified on real hardware/Cuttlefish — that's Phase 2.
 >
-> **This is currently a compile-time blocker, not just a runtime-unverified one.** CI confirmed `VirtualMachine`/`VirtualMachineManager`/`VirtualMachineConfig` aren't present in the standard `compileSdk 35` public SDK jar — these are system/hidden APIs. Whether a compileOnly stub artifact exists, or this module needs to be built inside an AOSP tree instead of a plain Gradle project, is unresolved. See `knowledge-graph/TASKS.md` for the open question.
+> **Cancellation and timeout are real.** The scan coroutine can be cancelled mid-flight (Home screen's "Cancel Scan"); VM teardown (`vm.stop()` via `VmSession.close()`) always runs because it happens inside `Closeable.use{}`'s `finally`, which isn't itself a suspending call and so isn't skipped by cancellation. The timeout itself is user-configurable (Settings → VM session timeout) via `WardenSettingsRepository`, not a hardcoded constant.
 
 ---
 
@@ -129,15 +132,22 @@ AuditEvent {
   id                  Long        (auto-generated)
   timestampEpochMillis Long
   eventType           FILE_SCAN | NETWORK_TRAFFIC
-  inputDescriptor     String      (filename or "TCP 1.2.3.4:80 → 5.6.7.8:443")
-  outcome             SUCCESS | FAILURE | ERROR
+  inputDescriptor     String      (filename or "UDP 1.2.3.4:80 → 5.6.7.8:443")
+  outcome             SUCCESS | FAILURE | ERROR | BLOCKED
   resultSummary       String?
   durationMillis      Long
   errorMessage        String?
+  flagged             Boolean     (user-toggled, or auto-set for unrelayed network flows)
+  remoteHost          String?     (network events only)
+  stepTimingsCsv       String?     (file scans only — real per-step VM timings, "BOOTING:400,EXECUTING:1800,...")
 }
 ```
 
-Exposed as a `Flow<List<AuditEvent>>` so the Compose UI reacts to inserts in real-time.
+Exposed as a `Flow<List<AuditEvent>>` so the Compose UI reacts to inserts in real-time. `flagged` is never set from a fabricated detection signal (no invented TLS-fingerprint/threat-intel logic) — it's either a manual user action or an honest "this flow wasn't actually relayed" marker (TCP isn't relayed yet, see `netmonitor`'s known-gap below).
+
+### Blocked hosts
+
+A second table (`blocked_hosts`: `host`, `reason`, `blockedAtEpochMillis`) backs real enforcement, not just a UI list. `NetMonitorService` subscribes to the live blocklist and checks the destination IP before relaying any UDP packet; a match is dropped and logged as `AuditOutcome.BLOCKED` instead of forwarded. Hosts get added either from the Blocked Hosts screen's manual entry or from a network event's detail screen ("Block Host").
 
 ---
 
@@ -145,13 +155,14 @@ Exposed as a `Flow<List<AuditEvent>>` so the Compose UI reacts to inserts in rea
 
 | Property | Value |
 |----------|-------|
-| `minSdk` | `33` (Android 13 — AVF/Microdroid floor) |
+| `minSdk` | `33` (Android 13 — AVF/Microdroid floor, and the floor where `POST_NOTIFICATIONS` became a runtime permission) |
 | `compileSdk` / `targetSdk` | `35` (Android 15) |
 | AGP | `8.7.3` |
 | Kotlin | `2.0.21` |
 | KSP | `2.0.21-1.0.28` |
-| Compose BOM | `2026.08.00` |
+| Compose BOM | `2024.10.01` (pinned — see the version catalog comment for why newer BOMs don't work under this AGP/compileSdk pin) |
 | Room | `2.6.1` |
+| DataStore (Preferences) | `1.1.1` — `WardenSettingsRepository` in `:audit` |
 | Gradle Wrapper | `8.9` |
 | CI | GitHub-hosted runners, `./gradlew build` (incl. Robolectric tests) |
 
