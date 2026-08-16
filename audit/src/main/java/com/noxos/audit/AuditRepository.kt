@@ -9,6 +9,7 @@ interface AuditRepository {
     suspend fun get(id: Long): AuditEvent?
     suspend fun setFlagged(id: Long, flagged: Boolean)
     suspend fun purgeOlderThan(cutoffEpochMillis: Long): Int
+    suspend fun delete(id: Long)
 }
 
 object AuditModule {

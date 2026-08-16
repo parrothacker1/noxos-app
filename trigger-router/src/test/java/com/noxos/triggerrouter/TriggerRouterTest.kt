@@ -126,6 +126,10 @@ class FakeAuditRepository : AuditRepository {
         recordedEvents.removeAll { it.timestampEpochMillis < cutoffEpochMillis }
         return before - recordedEvents.size
     }
+
+    override suspend fun delete(id: Long) {
+        recordedEvents.removeAll { it.id == id }
+    }
 }
 
 class FakeVmSession(private val transport: VmTransport) : VmSession {

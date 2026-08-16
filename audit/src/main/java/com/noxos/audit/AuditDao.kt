@@ -22,4 +22,7 @@ interface AuditDao {
 
     @Query("DELETE FROM audit_entries WHERE timestampEpochMillis < :cutoffEpochMillis")
     suspend fun deleteOlderThan(cutoffEpochMillis: Long): Int
+
+    @Query("DELETE FROM audit_entries WHERE id = :id")
+    suspend fun delete(id: Long)
 }

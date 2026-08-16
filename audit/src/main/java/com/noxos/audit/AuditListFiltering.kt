@@ -6,6 +6,14 @@ import java.time.temporal.ChronoUnit
 
 enum class AuditFilter { ALL, FILES, NETWORK, FLAGGED }
 
+enum class AuditSeverity { SAFE, FLAGGED, BLOCKED }
+
+fun severityOf(event: AuditEvent): AuditSeverity = when {
+    event.outcome == AuditOutcome.BLOCKED -> AuditSeverity.BLOCKED
+    event.outcome == AuditOutcome.FAILURE || event.outcome == AuditOutcome.ERROR || event.flagged -> AuditSeverity.FLAGGED
+    else -> AuditSeverity.SAFE
+}
+
 fun filterAuditEvents(events: List<AuditEvent>, filter: AuditFilter, query: String): List<AuditEvent> {
     val q = query.trim().lowercase()
     return events.filter { event ->

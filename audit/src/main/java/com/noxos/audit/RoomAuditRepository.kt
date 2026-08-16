@@ -37,6 +37,10 @@ class RoomAuditRepository(private val auditDao: AuditDao) : AuditRepository {
         return auditDao.deleteOlderThan(cutoffEpochMillis)
     }
 
+    override suspend fun delete(id: Long) {
+        auditDao.delete(id)
+    }
+
     private fun AuditEntryEntity.toDomain() = AuditEvent(
         id = id,
         timestampEpochMillis = timestampEpochMillis,
