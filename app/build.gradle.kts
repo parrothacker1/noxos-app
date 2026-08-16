@@ -43,6 +43,8 @@ dependencies {
     implementation(project(":trigger-router"))
     implementation(project(":netmonitor"))
     implementation(project(":audit"))
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.lifecycle.runtime.ktx)
 
     // Compose
     implementation(platform(libs.compose.bom))

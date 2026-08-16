@@ -8,8 +8,10 @@ room = "2.6.1"
 # compileSdk 37 and will fail the build under this project's AGP 8.7.3 /
 # compileSdk 35 pin. Bump agp+compileSdk together with this if you need to.
 composeBom = "2024.10.01"
+coreKtx = "1.13.1"
 activityCompose = "1.9.1"
 lifecycleCompose = "2.8.4"
+lifecycleRuntimeKtx = "2.8.4"
 coroutines = "1.8.1"
 datastore = "1.1.1"
 junit = "4.13.2"
@@ -17,6 +19,8 @@ robolectric = "4.12"
 androidxTestExtJunit = "1.2.1"
 
 [libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -35,6 +39,7 @@ compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling
 compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleCompose" }
+lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
 
 # DataStore
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
