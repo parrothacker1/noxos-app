@@ -212,8 +212,8 @@ class MainActivity : ComponentActivity() {
                             themeMode = themeMode,
                             onThemeModeChange = { mode -> coroutineScope.launch { settingsRepository.setThemeMode(mode) } },
                             vmSessionTimeoutSeconds = vmTimeout,
-                            onCycleVmTimeout = {
-                                coroutineScope.launch { settingsRepository.setVmSessionTimeoutSeconds(nextTimeoutOption(vmTimeout)) }
+                            onVmTimeoutSelected = { seconds ->
+                                coroutineScope.launch { settingsRepository.setVmSessionTimeoutSeconds(seconds) }
                             },
                             blockedHostsCount = blockedHosts.size,
                             onViewBlockedHosts = { currentScreen = Screen.BlockedHosts },
@@ -226,11 +226,10 @@ class MainActivity : ComponentActivity() {
                                 coroutineScope.launch { settingsRepository.setScanCompletionAlertsEnabled(enabled) }
                             },
                             retentionDays = retentionDays,
-                            onCycleRetentionDays = {
-                                val next = nextRetentionOption(retentionDays)
+                            onRetentionDaysSelected = { days ->
                                 coroutineScope.launch {
-                                    settingsRepository.setAuditRetentionDays(next)
-                                    auditRepository.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), next))
+                                    settingsRepository.setAuditRetentionDays(days)
+                                    auditRepository.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), days))
                                 }
                             },
                             onExportAuditLog = {
@@ -266,15 +265,3 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val vmTimeoutOptions = listOf(15, 30, 60, 120)
-private val retentionOptions = listOf(30, 90, 180, 365)
-
-private fun nextTimeoutOption(current: Int): Int {
-    val index = vmTimeoutOptions.indexOf(current)
-    return vmTimeoutOptions[if (index == -1) 0 else (index + 1) % vmTimeoutOptions.size]
-}
-
-private fun nextRetentionOption(current: Int): Int {
-    val index = retentionOptions.indexOf(current)
-    return retentionOptions[if (index == -1) 0 else (index + 1) % retentionOptions.size]
-}
