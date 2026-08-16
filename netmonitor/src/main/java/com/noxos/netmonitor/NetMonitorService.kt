@@ -18,7 +18,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.nio.ByteBuffer
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.SocketTimeoutException
+import java.util.concurrent.ConcurrentHashMap
 
 class NetMonitorService : VpnService() {
 
@@ -26,9 +30,11 @@ class NetMonitorService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var captureJob: Job? = null
 
-    // Injected by the owning component before startService().
-    // In a real DI setup this would be injected; here we use the companion
-    // object pattern so MainActivity can wire it before starting the service.
+    private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
+    private val lastLoggedAt = ConcurrentHashMap<String, Long>()
+    private val logThrottleMs = 5_000L
+    private val udpIdleTimeoutMs = 30_000
+
     companion object {
         var auditRepository: AuditRepository? = null
 
@@ -71,6 +77,9 @@ class NetMonitorService : VpnService() {
 
     private fun stopMonitor() {
         captureJob?.cancel()
+        udpSessions.values.forEach { it.close() }
+        udpSessions.clear()
+        lastLoggedAt.clear()
         vpnInterface?.close()
         vpnInterface = null
     }
@@ -81,81 +90,118 @@ class NetMonitorService : VpnService() {
         super.onDestroy()
     }
 
-    // Reads IP packets from the VPN tun interface, classifies them, and
-    // forwards (passes through) or records them. Currently records metadata
-    // only — no deep-packet inspection yet (that's P10).
     private suspend fun runCaptureLoop(
         vpnIface: ParcelFileDescriptor,
         repo: AuditRepository
     ) {
         val inStream  = FileInputStream(vpnIface.fileDescriptor)
         val outStream = FileOutputStream(vpnIface.fileDescriptor)
-        val buf = ByteBuffer.allocate(32767)
+        val buf = ByteArray(32767)
 
         while (true) {
-            buf.clear()
-            val len = inStream.read(buf.array())
+            val len = inStream.read(buf)
             if (len <= 0) break
+            if (len < 20) continue
 
-            buf.limit(len)
-            val descriptor = extractFlowDescriptor(buf.array(), len)
+            val version = (buf[0].toInt() and 0xF0) shr 4
+            if (version != 4) continue
 
-            // Pass the packet through unchanged (forward it back to the tun).
-            outStream.write(buf.array(), 0, len)
+            val descriptor = PacketUtils.extractFlowDescriptor(buf, len)
+            val protocol = buf[9].toInt() and 0xFF
+
+            val forwarded = if (protocol == 17) {
+                relayUdp(buf, len, outStream)
+            } else {
+                false
+            }
 
             if (descriptor != null) {
-                val startMs = System.currentTimeMillis()
-                repo.record(
-                    AuditEvent(
-                        timestampEpochMillis = startMs,
-                        eventType = AuditEventType.NETWORK_TRAFFIC,
-                        inputDescriptor = descriptor,
-                        outcome = AuditOutcome.SUCCESS,
-                        resultSummary = "forwarded",
-                        durationMillis = 0L,
-                        errorMessage = null
-                    )
+                logFlow(descriptor, repo, forwarded)
+            }
+        }
+    }
+
+    private fun relayUdp(packet: ByteArray, len: Int, outStream: FileOutputStream): Boolean {
+        val ihl = (packet[0].toInt() and 0x0F) * 4
+        if (ihl + 8 > len) return false
+
+        val srcIp = PacketUtils.ipBytes(packet, 12)
+        val dstIp = PacketUtils.ipBytes(packet, 16)
+        val srcPort = PacketUtils.readUShort(packet, ihl)
+        val dstPort = PacketUtils.readUShort(packet, ihl + 2)
+        val udpLen = PacketUtils.readUShort(packet, ihl + 4)
+        val payloadOffset = ihl + 8
+        val payloadLen = (udpLen - 8).coerceAtMost(len - payloadOffset).coerceAtLeast(0)
+
+        val clientKey = "${srcIp.joinToString(".")}:$srcPort"
+        val socket = udpSessions.getOrPut(clientKey) {
+            DatagramSocket().also { sock ->
+                protect(sock)
+                sock.soTimeout = udpIdleTimeoutMs
+                serviceScope.launch { pumpUdpReplies(clientKey, sock, srcIp, srcPort, outStream) }
+            }
+        }
+
+        return try {
+            val dstAddr = InetAddress.getByAddress(dstIp)
+            socket.send(DatagramPacket(packet, payloadOffset, payloadLen, dstAddr, dstPort))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private suspend fun pumpUdpReplies(
+        clientKey: String,
+        socket: DatagramSocket,
+        clientIp: ByteArray,
+        clientPort: Int,
+        outStream: FileOutputStream
+    ) {
+        val buf = ByteArray(32767)
+        try {
+            while (!socket.isClosed) {
+                val reply = DatagramPacket(buf, buf.size)
+                try {
+                    socket.receive(reply)
+                } catch (_: SocketTimeoutException) {
+                    break
+                }
+
+                val remoteIp = reply.address.address
+                if (remoteIp.size != 4) continue
+
+                val response = PacketUtils.buildUdpPacket(
+                    srcIp = remoteIp, srcPort = reply.port,
+                    dstIp = clientIp, dstPort = clientPort,
+                    payload = reply.data, payloadOffset = reply.offset, payloadLen = reply.length
                 )
+                synchronized(outStream) { outStream.write(response) }
             }
+        } catch (_: Exception) {
+        } finally {
+            udpSessions.remove(clientKey)
+            socket.close()
         }
     }
 
-    // Extracts a human-readable flow descriptor from raw IP packet bytes.
-    // Returns null for packets that can't be parsed (non-IP, fragmented, etc.).
-    private fun extractFlowDescriptor(packet: ByteArray, len: Int): String? {
-        if (len < 20) return null
+    private suspend fun logFlow(descriptor: String, repo: AuditRepository, forwarded: Boolean) {
+        val now = System.currentTimeMillis()
+        val last = lastLoggedAt[descriptor]
+        if (last != null && now - last < logThrottleMs) return
+        lastLoggedAt[descriptor] = now
 
-        val version = (packet[0].toInt() and 0xF0) shr 4
-        if (version != 4) return null  // IPv6 not yet handled
-
-        val protocol = packet[9].toInt() and 0xFF
-        val protoName = when (protocol) {
-            6   -> "TCP"
-            17  -> "UDP"
-            1   -> "ICMP"
-            else -> "IP/$protocol"
-        }
-
-        val srcIp = formatIp(packet, 12)
-        val dstIp = formatIp(packet, 16)
-
-        if (len >= 24 && (protocol == 6 || protocol == 17)) {
-            val ihl = (packet[0].toInt() and 0x0F) * 4
-            if (ihl + 4 <= len) {
-                val srcPort = ((packet[ihl].toInt() and 0xFF) shl 8) or
-                              (packet[ihl + 1].toInt() and 0xFF)
-                val dstPort = ((packet[ihl + 2].toInt() and 0xFF) shl 8) or
-                              (packet[ihl + 3].toInt() and 0xFF)
-                return "$protoName $srcIp:$srcPort → $dstIp:$dstPort"
-            }
-        }
-
-        return "$protoName $srcIp → $dstIp"
-    }
-
-    private fun formatIp(packet: ByteArray, offset: Int): String {
-        return "${packet[offset].toInt() and 0xFF}.${packet[offset+1].toInt() and 0xFF}" +
-               ".${packet[offset+2].toInt() and 0xFF}.${packet[offset+3].toInt() and 0xFF}"
+        repo.record(
+            AuditEvent(
+                timestampEpochMillis = now,
+                eventType = AuditEventType.NETWORK_TRAFFIC,
+                inputDescriptor = descriptor,
+                outcome = AuditOutcome.SUCCESS,
+                resultSummary = if (forwarded) "relayed" else "observed only",
+                durationMillis = 0L,
+                errorMessage = null
+            )
+        )
     }
 
     private fun buildNotification(): Notification {

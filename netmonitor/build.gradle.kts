@@ -26,4 +26,7 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)
+
+    // Unit tests (PacketUtils is plain Kotlin, no Android deps -> no Robolectric needed)
+    testImplementation(libs.junit)
 }
