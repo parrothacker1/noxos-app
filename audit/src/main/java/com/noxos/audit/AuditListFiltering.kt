@@ -21,7 +21,7 @@ fun filterAuditEvents(events: List<AuditEvent>, filter: AuditFilter, query: Stri
             AuditFilter.ALL -> true
             AuditFilter.FILES -> event.eventType == AuditEventType.FILE_SCAN
             AuditFilter.NETWORK -> event.eventType == AuditEventType.NETWORK_TRAFFIC
-            AuditFilter.FLAGGED -> event.flagged
+            AuditFilter.FLAGGED -> severityOf(event) == AuditSeverity.FLAGGED
         }
         val matchesQuery = q.isEmpty() ||
             event.inputDescriptor.lowercase().contains(q) ||
