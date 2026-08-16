@@ -6,8 +6,16 @@ import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
+import com.noxos.audit.WardenSettingsRepository
 import com.noxos.triggerrouter.protocol.VmPayloadProtocol
 import com.noxos.triggerrouter.vm.VmSessionFactory
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -15,14 +23,23 @@ import java.io.ByteArrayOutputStream
 class TriggerRouter(
     private val context: Context,
     private val auditRepository: AuditRepository,
-    private val vmSessionFactory: VmSessionFactory
+    private val vmSessionFactory: VmSessionFactory,
+    private val settingsRepository: WardenSettingsRepository
 ) {
+
+    private val _progress = MutableStateFlow(ScanProgress())
+    val progress: StateFlow<ScanProgress> = _progress
 
     suspend fun scanFile(fileUri: Uri, inputDescriptor: String): ScanResult {
         val startTime = System.currentTimeMillis()
         var outcome = AuditOutcome.ERROR
         var resultSummary: String? = null
         var errorMessage: String? = null
+        val stepDurations = mutableMapOf<ScanStep, Long>()
+
+        fun enter(step: ScanStep) {
+            _progress.value = ScanProgress(step, inputDescriptor, stepDurations.toMap())
+        }
 
         try {
             val fileBytes = readFileBytes(fileUri)
@@ -33,16 +50,28 @@ class TriggerRouter(
                 return ScanResult.Failure(err)
             }
 
-            val scanResult = withTimeout(10000L) {
+            val timeoutMillis = settingsRepository.vmSessionTimeoutSeconds.first() * 1000L
+
+            enter(ScanStep.BOOTING)
+            var stepStart = System.currentTimeMillis()
+
+            val scanResult = withTimeout(timeoutMillis) {
                 vmSessionFactory.createSession(context).use { session ->
+                    stepDurations[ScanStep.BOOTING] = System.currentTimeMillis() - stepStart
+                    enter(ScanStep.EXECUTING)
+                    stepStart = System.currentTimeMillis()
+
                     val transport = session.getTransport()
                     val requestPayload = VmPayloadProtocol.encodeRequest(fileBytes)
                     transport.send(requestPayload)
-
                     val responsePayload = transport.receive()
-                    val decoded = VmPayloadProtocol.decodeResponse(responsePayload)
 
-                    when (decoded.status) {
+                    stepDurations[ScanStep.EXECUTING] = System.currentTimeMillis() - stepStart
+                    enter(ScanStep.SANITIZING)
+                    stepStart = System.currentTimeMillis()
+
+                    val decoded = VmPayloadProtocol.decodeResponse(responsePayload)
+                    val result = when (decoded.status) {
                         0 -> {
                             val json = JSONObject(decoded.json)
                             val metadata = mutableMapOf<String, String>()
@@ -69,13 +98,23 @@ class TriggerRouter(
                             ScanResult.Error(errorMessage!!)
                         }
                     }
+
+                    stepDurations[ScanStep.SANITIZING] = System.currentTimeMillis() - stepStart
+                    enter(ScanStep.DESTROYING)
+                    stepStart = System.currentTimeMillis()
+                    result
                 }
             }
+            stepDurations[ScanStep.DESTROYING] = System.currentTimeMillis() - stepStart
             return scanResult
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+        } catch (e: TimeoutCancellationException) {
             outcome = AuditOutcome.ERROR
-            errorMessage = "Scan timed out (10s limit)"
+            errorMessage = "Scan timed out"
             return ScanResult.Error(errorMessage!!)
+        } catch (e: CancellationException) {
+            outcome = AuditOutcome.ERROR
+            errorMessage = "Scan cancelled"
+            throw e
         } catch (e: Exception) {
             outcome = AuditOutcome.ERROR
             errorMessage = e.message ?: e.toString()
@@ -89,9 +128,13 @@ class TriggerRouter(
                 outcome = outcome,
                 resultSummary = resultSummary,
                 durationMillis = duration,
-                errorMessage = errorMessage
+                errorMessage = errorMessage,
+                stepTimingsCsv = ScanProgress(stepDurationsMillis = stepDurations).toCsv().ifEmpty { null }
             )
-            auditRepository.record(auditEvent)
+            withContext(NonCancellable) {
+                auditRepository.record(auditEvent)
+            }
+            enter(ScanStep.DONE)
         }
     }
 

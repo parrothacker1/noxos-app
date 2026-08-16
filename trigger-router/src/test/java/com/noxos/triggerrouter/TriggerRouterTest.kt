@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
+import com.noxos.audit.WardenSettingsRepository
 import com.noxos.triggerrouter.vm.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,7 +39,7 @@ class TriggerRouterTest {
         auditRepository = FakeAuditRepository()
         transport = FakeVmTransport()
         sessionFactory = FakeVmSessionFactory(transport)
-        router = TriggerRouter(context, auditRepository, sessionFactory)
+        router = TriggerRouter(context, auditRepository, sessionFactory, WardenSettingsRepository(context))
     }
 
     @Test
@@ -113,6 +114,17 @@ class FakeAuditRepository : AuditRepository {
 
     override suspend fun get(id: Long): AuditEvent? {
         return recordedEvents.find { it.id == id }
+    }
+
+    override suspend fun setFlagged(id: Long, flagged: Boolean) {
+        val index = recordedEvents.indexOfFirst { it.id == id }
+        if (index >= 0) recordedEvents[index] = recordedEvents[index].copy(flagged = flagged)
+    }
+
+    override suspend fun purgeOlderThan(cutoffEpochMillis: Long): Int {
+        val before = recordedEvents.size
+        recordedEvents.removeAll { it.timestampEpochMillis < cutoffEpochMillis }
+        return before - recordedEvents.size
     }
 }
 
