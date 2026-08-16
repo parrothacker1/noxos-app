@@ -54,4 +54,12 @@ class PacketUtilsTest {
         PacketUtils.writeUShort(buf, 0, 0xBEEF)
         assertEquals(0xBEEF, PacketUtils.readUShort(buf, 0))
     }
+
+    @Test
+    fun `blocked host checker matches on exact ip`() {
+        val blocked = setOf("91.203.5.12", "203.0.113.44")
+        org.junit.Assert.assertTrue(BlockedHostChecker.isBlocked("91.203.5.12", blocked))
+        org.junit.Assert.assertFalse(BlockedHostChecker.isBlocked("8.8.8.8", blocked))
+        org.junit.Assert.assertFalse(BlockedHostChecker.isBlocked("91.203.5.12", emptySet()))
+    }
 }

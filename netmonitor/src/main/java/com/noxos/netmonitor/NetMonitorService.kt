@@ -10,11 +10,15 @@ import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
+import com.noxos.audit.BlockedHostRepository
+import com.noxos.audit.WardenSettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -29,20 +33,30 @@ class NetMonitorService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var captureJob: Job? = null
+    private var blocklistJob: Job? = null
 
     private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
     private val lastLoggedAt = ConcurrentHashMap<String, Long>()
     private val logThrottleMs = 5_000L
     private val udpIdleTimeoutMs = 30_000
 
+    @Volatile
+    private var blockedHostsCache: Set<String> = emptySet()
+
     companion object {
         var auditRepository: AuditRepository? = null
+        var blockedHostRepository: BlockedHostRepository? = null
+        var settingsRepository: WardenSettingsRepository? = null
+
+        val connectionsInspected = MutableStateFlow(0)
 
         const val ACTION_START = "com.noxos.netmonitor.START"
         const val ACTION_STOP  = "com.noxos.netmonitor.STOP"
 
         private const val NOTIFICATION_CHANNEL_ID = "noxos_netmonitor"
         private const val NOTIFICATION_ID = 1001
+        private const val FLAGGED_NOTIFICATION_CHANNEL_ID = "noxos_flagged_events"
+        private const val FLAGGED_NOTIFICATION_ID = 1002
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -61,6 +75,7 @@ class NetMonitorService : VpnService() {
 
     private fun startMonitor() {
         startForeground(NOTIFICATION_ID, buildNotification())
+        connectionsInspected.value = 0
 
         val builder = Builder()
             .setSession("Warden Network Monitor")
@@ -70,6 +85,15 @@ class NetMonitorService : VpnService() {
         vpnInterface = builder.establish() ?: return
 
         val repo = auditRepository ?: return
+
+        blocklistJob = blockedHostRepository?.let { hostsRepo ->
+            serviceScope.launch {
+                hostsRepo.observeAll().collect { list ->
+                    blockedHostsCache = list.map { it.host }.toSet()
+                }
+            }
+        }
+
         captureJob = serviceScope.launch {
             runCaptureLoop(vpnInterface!!, repo)
         }
@@ -77,6 +101,7 @@ class NetMonitorService : VpnService() {
 
     private fun stopMonitor() {
         captureJob?.cancel()
+        blocklistJob?.cancel()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
         lastLoggedAt.clear()
@@ -108,6 +133,14 @@ class NetMonitorService : VpnService() {
 
             val descriptor = PacketUtils.extractFlowDescriptor(buf, len)
             val protocol = buf[9].toInt() and 0xFF
+            val dstIpStr = PacketUtils.formatIp(buf, 16)
+
+            if (BlockedHostChecker.isBlocked(dstIpStr, blockedHostsCache)) {
+                if (descriptor != null) {
+                    logFlow(descriptor, repo, AuditOutcome.BLOCKED, flagged = false, resultSummary = "blocked host", remoteHost = dstIpStr)
+                }
+                continue
+            }
 
             val forwarded = if (protocol == 17) {
                 relayUdp(buf, len, outStream)
@@ -116,7 +149,12 @@ class NetMonitorService : VpnService() {
             }
 
             if (descriptor != null) {
-                logFlow(descriptor, repo, forwarded)
+                val summary = when {
+                    forwarded -> "relayed"
+                    protocol == 17 -> "udp relay failed"
+                    else -> "not relayed — TCP isolation unverified in this build"
+                }
+                logFlow(descriptor, repo, AuditOutcome.SUCCESS, flagged = !forwarded, resultSummary = summary, remoteHost = dstIpStr)
             }
         }
     }
@@ -185,7 +223,14 @@ class NetMonitorService : VpnService() {
         }
     }
 
-    private suspend fun logFlow(descriptor: String, repo: AuditRepository, forwarded: Boolean) {
+    private suspend fun logFlow(
+        descriptor: String,
+        repo: AuditRepository,
+        outcome: AuditOutcome,
+        flagged: Boolean,
+        resultSummary: String,
+        remoteHost: String
+    ) {
         val now = System.currentTimeMillis()
         val last = lastLoggedAt[descriptor]
         if (last != null && now - last < logThrottleMs) return
@@ -196,12 +241,39 @@ class NetMonitorService : VpnService() {
                 timestampEpochMillis = now,
                 eventType = AuditEventType.NETWORK_TRAFFIC,
                 inputDescriptor = descriptor,
-                outcome = AuditOutcome.SUCCESS,
-                resultSummary = if (forwarded) "relayed" else "observed only",
+                outcome = outcome,
+                resultSummary = resultSummary,
                 durationMillis = 0L,
-                errorMessage = null
+                errorMessage = null,
+                flagged = flagged,
+                remoteHost = remoteHost
             )
         )
+        connectionsInspected.value += 1
+
+        val alertsEnabled = settingsRepository?.flaggedEventAlertsEnabled?.first() ?: true
+        if (flagged && alertsEnabled) {
+            notifyFlaggedEvent(descriptor, resultSummary)
+        }
+    }
+
+    private fun notifyFlaggedEvent(descriptor: String, resultSummary: String) {
+        val channel = NotificationChannel(
+            FLAGGED_NOTIFICATION_CHANNEL_ID,
+            "Warden Flagged Events",
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        getSystemService(NotificationManager::class.java)
+            .createNotificationChannel(channel)
+
+        val notification = Notification.Builder(this, FLAGGED_NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("Flagged: $descriptor")
+            .setContentText(resultSummary)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setAutoCancel(true)
+            .build()
+        getSystemService(NotificationManager::class.java)
+            .notify(FLAGGED_NOTIFICATION_ID, notification)
     }
 
     private fun buildNotification(): Notification {
