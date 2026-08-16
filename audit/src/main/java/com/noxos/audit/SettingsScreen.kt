@@ -144,30 +144,30 @@ private fun <T> SettingsDropdownRow(
     onSelect: (T) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable { expanded = true }.padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { expanded = true }.padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        Box {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(displayText(selected), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(displayText(option)) },
-                    onClick = {
-                        onSelect(option)
-                        expanded = false
-                    },
-                    leadingIcon = if (option == selected) {
-                        { Icon(Icons.Outlined.Check, contentDescription = null) }
-                    } else null
-                )
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(displayText(option)) },
+                        onClick = {
+                            onSelect(option)
+                            expanded = false
+                        },
+                        leadingIcon = if (option == selected) {
+                            { Icon(Icons.Outlined.Check, contentDescription = null) }
+                        } else null
+                    )
+                }
             }
         }
     }
