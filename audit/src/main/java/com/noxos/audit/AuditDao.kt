@@ -16,4 +16,10 @@ interface AuditDao {
 
     @Query("SELECT * FROM audit_entries WHERE id = :id")
     suspend fun get(id: Long): AuditEntryEntity?
+
+    @Query("UPDATE audit_entries SET flagged = :flagged WHERE id = :id")
+    suspend fun setFlagged(id: Long, flagged: Boolean)
+
+    @Query("DELETE FROM audit_entries WHERE timestampEpochMillis < :cutoffEpochMillis")
+    suspend fun deleteOlderThan(cutoffEpochMillis: Long): Int
 }

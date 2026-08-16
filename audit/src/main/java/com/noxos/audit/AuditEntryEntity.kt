@@ -13,5 +13,8 @@ data class AuditEntryEntity(
     val outcome: AuditOutcome,
     val resultSummary: String?,
     val durationMillis: Long,
-    val errorMessage: String?
+    val errorMessage: String?,
+    val flagged: Boolean = false,
+    val remoteHost: String? = null,
+    val stepTimingsCsv: String? = null
 )

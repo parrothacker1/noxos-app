@@ -13,39 +13,41 @@ class RoomAuditRepository(private val auditDao: AuditDao) : AuditRepository {
             outcome = event.outcome,
             resultSummary = event.resultSummary,
             durationMillis = event.durationMillis,
-            errorMessage = event.errorMessage
+            errorMessage = event.errorMessage,
+            flagged = event.flagged,
+            remoteHost = event.remoteHost,
+            stepTimingsCsv = event.stepTimingsCsv
         )
         auditDao.insert(entity)
     }
 
     override fun observeAll(): Flow<List<AuditEvent>> {
-        return auditDao.observeAll().map { list ->
-            list.map { entity ->
-                AuditEvent(
-                    id = entity.id,
-                    timestampEpochMillis = entity.timestampEpochMillis,
-                    eventType = entity.eventType,
-                    inputDescriptor = entity.inputDescriptor,
-                    outcome = entity.outcome,
-                    resultSummary = entity.resultSummary,
-                    durationMillis = entity.durationMillis,
-                    errorMessage = entity.errorMessage
-                )
-            }
-        }
+        return auditDao.observeAll().map { list -> list.map { it.toDomain() } }
     }
 
     override suspend fun get(id: Long): AuditEvent? {
-        val entity = auditDao.get(id) ?: return null
-        return AuditEvent(
-            id = entity.id,
-            timestampEpochMillis = entity.timestampEpochMillis,
-            eventType = entity.eventType,
-            inputDescriptor = entity.inputDescriptor,
-            outcome = entity.outcome,
-            resultSummary = entity.resultSummary,
-            durationMillis = entity.durationMillis,
-            errorMessage = entity.errorMessage
-        )
+        return auditDao.get(id)?.toDomain()
     }
+
+    override suspend fun setFlagged(id: Long, flagged: Boolean) {
+        auditDao.setFlagged(id, flagged)
+    }
+
+    override suspend fun purgeOlderThan(cutoffEpochMillis: Long): Int {
+        return auditDao.deleteOlderThan(cutoffEpochMillis)
+    }
+
+    private fun AuditEntryEntity.toDomain() = AuditEvent(
+        id = id,
+        timestampEpochMillis = timestampEpochMillis,
+        eventType = eventType,
+        inputDescriptor = inputDescriptor,
+        outcome = outcome,
+        resultSummary = resultSummary,
+        durationMillis = durationMillis,
+        errorMessage = errorMessage,
+        flagged = flagged,
+        remoteHost = remoteHost,
+        stepTimingsCsv = stepTimingsCsv
+    )
 }

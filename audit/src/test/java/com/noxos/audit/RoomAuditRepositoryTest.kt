@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,7 +46,10 @@ class RoomAuditRepositoryTest {
             outcome = AuditOutcome.SUCCESS,
             resultSummary = "EXIF clean",
             durationMillis = 120L,
-            errorMessage = null
+            errorMessage = null,
+            flagged = false,
+            remoteHost = null,
+            stepTimingsCsv = "BOOTING:400,EXECUTING:1800"
         )
 
         repository.record(event)
@@ -59,6 +64,9 @@ class RoomAuditRepositoryTest {
         assertEquals(event.resultSummary, firstEvent.resultSummary)
         assertEquals(event.durationMillis, firstEvent.durationMillis)
         assertEquals(event.errorMessage, firstEvent.errorMessage)
+        assertEquals(event.flagged, firstEvent.flagged)
+        assertEquals(event.remoteHost, firstEvent.remoteHost)
+        assertEquals(event.stepTimingsCsv, firstEvent.stepTimingsCsv)
         assertNotNull(firstEvent.id)
     }
 
@@ -67,11 +75,13 @@ class RoomAuditRepositoryTest {
         val event = AuditEvent(
             timestampEpochMillis = 2000L,
             eventType = AuditEventType.NETWORK_TRAFFIC,
-            inputDescriptor = "https://example.com/api",
-            outcome = AuditOutcome.ERROR,
-            resultSummary = null,
-            durationMillis = 50L,
-            errorMessage = "Timeout"
+            inputDescriptor = "10.0.0.4:1234 -> 91.203.5.12:443",
+            outcome = AuditOutcome.BLOCKED,
+            resultSummary = "blocked host",
+            durationMillis = 0L,
+            errorMessage = null,
+            flagged = false,
+            remoteHost = "91.203.5.12"
         )
 
         repository.record(event)
@@ -81,12 +91,60 @@ class RoomAuditRepositoryTest {
 
         val retrieved = repository.get(savedId)
         assertNotNull(retrieved)
-        assertEquals(event.timestampEpochMillis, retrieved!!.timestampEpochMillis)
-        assertEquals(event.eventType, retrieved.eventType)
-        assertEquals(event.inputDescriptor, retrieved.inputDescriptor)
-        assertEquals(event.outcome, retrieved.outcome)
-        assertEquals(event.resultSummary, retrieved.resultSummary)
-        assertEquals(event.durationMillis, retrieved.durationMillis)
-        assertEquals(event.errorMessage, retrieved.errorMessage)
+        assertEquals(event.outcome, retrieved!!.outcome)
+        assertEquals(event.remoteHost, retrieved.remoteHost)
+    }
+
+    @Test
+    fun testSetFlagged() = runBlocking {
+        val event = AuditEvent(
+            timestampEpochMillis = 3000L,
+            eventType = AuditEventType.FILE_SCAN,
+            inputDescriptor = "unknown.bin",
+            outcome = AuditOutcome.SUCCESS,
+            resultSummary = null,
+            durationMillis = 10L,
+            errorMessage = null
+        )
+        repository.record(event)
+        val savedId = repository.observeAll().first()[0].id
+        assertFalse(repository.get(savedId)!!.flagged)
+
+        repository.setFlagged(savedId, true)
+
+        assertTrue(repository.get(savedId)!!.flagged)
+    }
+
+    @Test
+    fun testPurgeOlderThan() = runBlocking {
+        repository.record(
+            AuditEvent(
+                timestampEpochMillis = 1000L,
+                eventType = AuditEventType.FILE_SCAN,
+                inputDescriptor = "old.jpg",
+                outcome = AuditOutcome.SUCCESS,
+                resultSummary = null,
+                durationMillis = 10L,
+                errorMessage = null
+            )
+        )
+        repository.record(
+            AuditEvent(
+                timestampEpochMillis = 5000L,
+                eventType = AuditEventType.FILE_SCAN,
+                inputDescriptor = "new.jpg",
+                outcome = AuditOutcome.SUCCESS,
+                resultSummary = null,
+                durationMillis = 10L,
+                errorMessage = null
+            )
+        )
+
+        val deleted = repository.purgeOlderThan(cutoffEpochMillis = 3000L)
+
+        assertEquals(1, deleted)
+        val remaining = repository.observeAll().first()
+        assertEquals(1, remaining.size)
+        assertEquals("new.jpg", remaining[0].inputDescriptor)
     }
 }

@@ -7,6 +7,8 @@ interface AuditRepository {
     suspend fun record(event: AuditEvent)
     fun observeAll(): Flow<List<AuditEvent>>
     suspend fun get(id: Long): AuditEvent?
+    suspend fun setFlagged(id: Long, flagged: Boolean)
+    suspend fun purgeOlderThan(cutoffEpochMillis: Long): Int
 }
 
 object AuditModule {
