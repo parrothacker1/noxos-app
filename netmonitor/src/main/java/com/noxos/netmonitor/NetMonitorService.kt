@@ -40,6 +40,8 @@ class NetMonitorService : VpnService() {
     private val logThrottleMs = 5_000L
     private val udpIdleTimeoutMs = 30_000
 
+    private var tcpRelay: TcpRelayManager? = null
+
     @Volatile
     private var blockedHostsCache: Set<String> = emptySet()
 
@@ -105,6 +107,8 @@ class NetMonitorService : VpnService() {
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
         lastLoggedAt.clear()
+        tcpRelay?.closeAll()
+        tcpRelay = null
         vpnInterface?.close()
         vpnInterface = null
     }
@@ -122,6 +126,9 @@ class NetMonitorService : VpnService() {
         val inStream  = FileInputStream(vpnIface.fileDescriptor)
         val outStream = FileOutputStream(vpnIface.fileDescriptor)
         val buf = ByteArray(32767)
+
+        val tcp = TcpRelayManager(serviceScope, ::protect, outStream)
+        tcpRelay = tcp
 
         while (true) {
             val len = inStream.read(buf)
@@ -142,17 +149,19 @@ class NetMonitorService : VpnService() {
                 continue
             }
 
-            val forwarded = if (protocol == 17) {
-                relayUdp(buf, len, outStream)
-            } else {
-                false
+            val forwarded = when (protocol) {
+                17 -> relayUdp(buf, len, outStream)
+                6  -> tcp.handle(buf, len)
+                else -> false
             }
 
             if (descriptor != null) {
                 val summary = when {
+                    forwarded && protocol == 6 -> "relayed (tcp)"
                     forwarded -> "relayed"
                     protocol == 17 -> "udp relay failed"
-                    else -> "not relayed — TCP isolation unverified in this build"
+                    protocol == 6 -> "tcp relay failed"
+                    else -> "not relayed"
                 }
                 logFlow(descriptor, repo, AuditOutcome.SUCCESS, flagged = !forwarded, resultSummary = summary, remoteHost = dstIpStr)
             }

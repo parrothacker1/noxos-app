@@ -29,6 +29,84 @@ internal object PacketUtils {
         return sum.inv() and 0xFFFF
     }
 
+    fun readUInt(buf: ByteArray, offset: Int): Long =
+        ((buf[offset].toLong() and 0xFF) shl 24) or
+        ((buf[offset + 1].toLong() and 0xFF) shl 16) or
+        ((buf[offset + 2].toLong() and 0xFF) shl 8) or
+        (buf[offset + 3].toLong() and 0xFF)
+
+    fun writeUInt(buf: ByteArray, offset: Int, value: Long) {
+        buf[offset] = ((value shr 24) and 0xFF).toByte()
+        buf[offset + 1] = ((value shr 16) and 0xFF).toByte()
+        buf[offset + 2] = ((value shr 8) and 0xFF).toByte()
+        buf[offset + 3] = (value and 0xFF).toByte()
+    }
+
+    private fun tcpChecksum(srcIp: ByteArray, dstIp: ByteArray, segment: ByteArray, segmentLen: Int): Int {
+        var sum = 0
+        sum += readUShort(srcIp, 0)
+        sum += readUShort(srcIp, 2)
+        sum += readUShort(dstIp, 0)
+        sum += readUShort(dstIp, 2)
+        sum += 6
+        sum += segmentLen
+
+        var i = 0
+        while (i + 1 < segmentLen) {
+            sum += readUShort(segment, i)
+            i += 2
+        }
+        if (i < segmentLen) {
+            sum += (segment[i].toInt() and 0xFF) shl 8
+        }
+
+        while (sum shr 16 != 0) sum = (sum and 0xFFFF) + (sum shr 16)
+        return sum.inv() and 0xFFFF
+    }
+
+    fun buildTcpPacket(
+        srcIp: ByteArray, srcPort: Int,
+        dstIp: ByteArray, dstPort: Int,
+        seq: Long, ack: Long, flags: Int,
+        payload: ByteArray, payloadOffset: Int, payloadLen: Int,
+        window: Int = 65535
+    ): ByteArray {
+        val tcpLen = 20 + payloadLen
+        val totalLen = 20 + tcpLen
+        val out = ByteArray(totalLen)
+
+        out[0] = 0x45.toByte()
+        out[1] = 0
+        writeUShort(out, 2, totalLen)
+        writeUShort(out, 4, 0)
+        writeUShort(out, 6, 0x4000)
+        out[8] = 64
+        out[9] = 6
+        writeUShort(out, 10, 0)
+        System.arraycopy(srcIp, 0, out, 12, 4)
+        System.arraycopy(dstIp, 0, out, 16, 4)
+        writeUShort(out, 10, ipChecksum(out, 20))
+
+        val tcpOffset = 20
+        writeUShort(out, tcpOffset, srcPort)
+        writeUShort(out, tcpOffset + 2, dstPort)
+        writeUInt(out, tcpOffset + 4, seq and 0xFFFFFFFFL)
+        writeUInt(out, tcpOffset + 8, ack and 0xFFFFFFFFL)
+        out[tcpOffset + 12] = (5 shl 4).toByte()
+        out[tcpOffset + 13] = flags.toByte()
+        writeUShort(out, tcpOffset + 14, window)
+        writeUShort(out, tcpOffset + 16, 0)
+        writeUShort(out, tcpOffset + 18, 0)
+        if (payloadLen > 0) {
+            System.arraycopy(payload, payloadOffset, out, tcpOffset + 20, payloadLen)
+        }
+
+        val tcpSegment = out.copyOfRange(tcpOffset, totalLen)
+        writeUShort(out, tcpOffset + 16, tcpChecksum(srcIp, dstIp, tcpSegment, tcpSegment.size))
+
+        return out
+    }
+
     fun buildUdpPacket(
         srcIp: ByteArray, srcPort: Int,
         dstIp: ByteArray, dstPort: Int,
