@@ -6,7 +6,6 @@ import kotlinx.coroutines.SupervisorJob
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Test
 import java.io.OutputStream
 import java.net.ServerSocket
@@ -25,7 +24,7 @@ class TcpRelayManagerTest {
     }
 
     private fun CapturingOutputStream.takePacket(): ByteArray =
-        packets.poll(5, TimeUnit.SECONDS) ?: fail("timed out waiting for relayed packet").let { ByteArray(0) }
+        packets.poll(5, TimeUnit.SECONDS) ?: throw AssertionError("timed out waiting for relayed packet")
 
     private fun tcpPayload(packet: ByteArray): ByteArray {
         val ihl = (packet[0].toInt() and 0x0F) * 4
@@ -88,7 +87,8 @@ class TcpRelayManagerTest {
         val ackForData = out.takePacket()
         assertEquals(TcpRelayManager.FLAG_ACK, tcpFlags(ackForData))
 
-        val receivedByServer = serverReceived.poll(5, TimeUnit.SECONDS) ?: fail("server never received relayed bytes")
+        val receivedByServer = serverReceived.poll(5, TimeUnit.SECONDS)
+            ?: throw AssertionError("server never received relayed bytes")
         assertArrayEquals("hello".toByteArray(), receivedByServer)
 
         val replyPacket = out.takePacket()
