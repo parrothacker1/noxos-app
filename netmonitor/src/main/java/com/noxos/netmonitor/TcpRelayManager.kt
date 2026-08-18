@@ -1,5 +1,6 @@
 package com.noxos.netmonitor
 
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.io.OutputStream
@@ -19,6 +20,7 @@ internal class TcpRelayManager(
         const val FLAG_SYN = 0x02
         const val FLAG_RST = 0x04
         const val FLAG_ACK = 0x10
+        private const val TAG = "WardenTcpRelay"
     }
 
     private enum class State { CONNECTING, ESTABLISHED }
@@ -112,11 +114,13 @@ internal class TcpRelayManager(
             session.socket.connect(InetSocketAddress(InetAddress.getByAddress(dstIp), dstPort), 10_000)
         }
         if (connected.isFailure) {
+            Log.e(TAG, "connect failed for $key: ${connected.exceptionOrNull()}")
             sessions.remove(key)
             sendControl(session, srcIp, srcPort, dstIp, dstPort, FLAG_RST or FLAG_ACK)
             return
         }
 
+        Log.d(TAG, "connected $key")
         session.state = State.ESTABLISHED
         sendControl(session, srcIp, srcPort, dstIp, dstPort, FLAG_SYN or FLAG_ACK, consumeSeq = true)
 

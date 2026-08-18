@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
@@ -59,6 +60,7 @@ class NetMonitorService : VpnService() {
         private const val NOTIFICATION_ID = 1001
         private const val FLAGGED_NOTIFICATION_CHANNEL_ID = "noxos_flagged_events"
         private const val FLAGGED_NOTIFICATION_ID = 1002
+        private const val TAG = "WardenNetMonitor"
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -84,9 +86,22 @@ class NetMonitorService : VpnService() {
             .addAddress("10.0.0.1", 32)
             .addRoute("0.0.0.0", 0)
 
-        vpnInterface = builder.establish() ?: return
+        val iface = builder.establish()
+        if (iface == null) {
+            Log.e(TAG, "builder.establish() returned null, tunnel not created")
+            stopSelf()
+            return
+        }
+        vpnInterface = iface
+        Log.i(TAG, "tunnel established")
 
-        val repo = auditRepository ?: return
+        val repo = auditRepository
+        if (repo == null) {
+            Log.e(TAG, "auditRepository was null at startMonitor(), stopping")
+            stopMonitor()
+            stopSelf()
+            return
+        }
 
         blocklistJob = blockedHostRepository?.let { hostsRepo ->
             serviceScope.launch {
@@ -125,11 +140,26 @@ class NetMonitorService : VpnService() {
     ) {
         val inStream  = FileInputStream(vpnIface.fileDescriptor)
         val outStream = FileOutputStream(vpnIface.fileDescriptor)
-        val buf = ByteArray(32767)
 
         val tcp = TcpRelayManager(serviceScope, ::protect, outStream)
         tcpRelay = tcp
 
+        Log.i(TAG, "capture loop started")
+        try {
+            runCaptureLoopBody(inStream, outStream, tcp, repo)
+        } catch (e: Exception) {
+            Log.e(TAG, "capture loop crashed", e)
+        }
+        Log.i(TAG, "capture loop exited")
+    }
+
+    private suspend fun runCaptureLoopBody(
+        inStream: FileInputStream,
+        outStream: FileOutputStream,
+        tcp: TcpRelayManager,
+        repo: AuditRepository
+    ) {
+        val buf = ByteArray(32767)
         while (true) {
             val len = inStream.read(buf)
             if (len <= 0) break
