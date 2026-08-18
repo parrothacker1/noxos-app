@@ -47,7 +47,8 @@ internal class TcpRelayManager(
         val payloadOffset = ihl + dataOffset
         val payloadLen = (len - payloadOffset).coerceAtLeast(0)
 
-        val key = "${srcIp.joinToString(".")}:$srcPort-${dstIp.joinToString(".")}:$dstPort"
+        val key = "${srcIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$srcPort-" +
+            "${dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$dstPort"
         val isSyn = flags and FLAG_SYN != 0
         val isAck = flags and FLAG_ACK != 0
         val isFin = flags and FLAG_FIN != 0
@@ -110,7 +111,8 @@ internal class TcpRelayManager(
         session.ourSeq = Random.nextLong(0, 0x100000000L)
 
         val connected = runCatching {
-            protect(session.socket)
+            val protectedOk = protect(session.socket)
+            Log.d(TAG, "protect() returned $protectedOk for $key")
             session.socket.connect(InetSocketAddress(InetAddress.getByAddress(dstIp), dstPort), 10_000)
         }
         if (connected.isFailure) {
