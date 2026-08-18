@@ -18,11 +18,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -165,8 +167,15 @@ class NetMonitorService : VpnService() {
     ) {
         val buf = ByteArray(32767)
         while (true) {
-            val len = inStream.read(buf)
-            if (len <= 0) break
+            val len = try {
+                inStream.read(buf)
+            } catch (e: IOException) {
+                -1
+            }
+            if (len < 0) {
+                delay(20)
+                continue
+            }
             if (len < 20) continue
 
             val version = (buf[0].toInt() and 0xF0) shr 4
