@@ -79,6 +79,10 @@ class NetMonitorService : VpnService() {
 
     private fun startMonitor() {
         startForeground(NOTIFICATION_ID, buildNotification())
+        if (vpnInterface != null) {
+            Log.i(TAG, "startMonitor() called while already active, ignoring")
+            return
+        }
         connectionsInspected.value = 0
 
         val builder = Builder()
