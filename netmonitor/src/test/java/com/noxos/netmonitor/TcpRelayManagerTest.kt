@@ -84,14 +84,18 @@ class TcpRelayManagerTest {
         )
         assertTrue(relay.handle(dataPacket, dataPacket.size))
 
-        val ackForData = out.takePacket()
+        val firstAfterData = out.takePacket()
+        val secondAfterData = out.takePacket()
+        val (ackForData, replyPacket) =
+            if (tcpPayload(firstAfterData).isEmpty()) firstAfterData to secondAfterData
+            else secondAfterData to firstAfterData
         assertEquals(TcpRelayManager.FLAG_ACK, tcpFlags(ackForData))
+        assertTrue(tcpPayload(ackForData).isEmpty())
 
         val receivedByServer = serverReceived.poll(5, TimeUnit.SECONDS)
             ?: throw AssertionError("server never received relayed bytes")
         assertArrayEquals("hello".toByteArray(), receivedByServer)
 
-        val replyPacket = out.takePacket()
         assertArrayEquals("world".toByteArray(), tcpPayload(replyPacket))
 
         val finPacket = out.takePacket()
