@@ -84,22 +84,36 @@ class TcpRelayManagerTest {
         )
         assertTrue(relay.handle(dataPacket, dataPacket.size))
 
-        val firstAfterData = out.takePacket()
-        val secondAfterData = out.takePacket()
-        val (ackForData, replyPacket) =
-            if (tcpPayload(firstAfterData).isEmpty()) firstAfterData to secondAfterData
-            else secondAfterData to firstAfterData
-        assertEquals(TcpRelayManager.FLAG_ACK, tcpFlags(ackForData))
+        // The mock server closes its socket right after writing "world", so its FIN can race
+        // into this same window alongside our ack-for-data and the relayed reply - identify
+        // each of the three by what it actually is, not by arrival order or a fixed count.
+        var ackForData: ByteArray? = null
+        var replyPacket: ByteArray? = null
+        var finPacket: ByteArray? = null
+        var attempts = 0
+        while ((ackForData == null || replyPacket == null || finPacket == null) && attempts < 6) {
+            val packet = out.takePacket()
+            attempts++
+            when {
+                tcpFlags(packet) and TcpRelayManager.FLAG_FIN != 0 -> finPacket = packet
+                tcpPayload(packet).contentEquals("world".toByteArray()) -> replyPacket = packet
+                tcpFlags(packet) == TcpRelayManager.FLAG_ACK && tcpPayload(packet).isEmpty() -> ackForData = packet
+            }
+        }
+
+        assertEquals(TcpRelayManager.FLAG_ACK, tcpFlags(ackForData ?: throw AssertionError("never saw the ack for our data")))
         assertTrue(tcpPayload(ackForData).isEmpty())
 
         val receivedByServer = serverReceived.poll(5, TimeUnit.SECONDS)
             ?: throw AssertionError("server never received relayed bytes")
         assertArrayEquals("hello".toByteArray(), receivedByServer)
 
-        assertArrayEquals("world".toByteArray(), tcpPayload(replyPacket))
+        assertArrayEquals("world".toByteArray(), tcpPayload(replyPacket ?: throw AssertionError("never saw the relayed reply")))
 
-        val finPacket = out.takePacket()
-        assertEquals(TcpRelayManager.FLAG_FIN or TcpRelayManager.FLAG_ACK, tcpFlags(finPacket))
+        assertEquals(
+            TcpRelayManager.FLAG_FIN or TcpRelayManager.FLAG_ACK,
+            tcpFlags(finPacket ?: throw AssertionError("never saw the relayed fin"))
+        )
 
         server.close()
         serverThread.join(2000)
