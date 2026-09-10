@@ -10,6 +10,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,11 +26,12 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BlockedHostsScreen(
-    hosts: List<BlockedHost>,
+fun AclScreen(
+    entries: List<AclEntry>,
     onBack: () -> Unit,
-    onUnblock: (String) -> Unit,
-    onBlockManually: (String) -> Unit,
+    onAllow: (String) -> Unit,
+    onBlock: (String) -> Unit,
+    onRemove: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
@@ -35,7 +39,7 @@ fun BlockedHostsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Blocked Hosts") },
+                title = { Text("Access Control List") },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, contentDescription = "Back") }
                 }
@@ -45,20 +49,26 @@ fun BlockedHostsScreen(
     ) { innerPadding ->
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 20.dp)) {
             Text(
-                "Connections to these hosts are terminated before they reach the real network stack.",
+                "Blocked hosts are terminated before they reach the real network stack. " +
+                    "Flagged hosts are new destinations awaiting analysis — traffic still flows.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 12.dp)
             )
 
-            if (hosts.isEmpty()) {
+            if (entries.isEmpty()) {
                 Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
-                    Text("No hosts blocked.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("No hosts in the ACL yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(hosts, key = { it.host }) { host ->
-                        BlockedHostRow(host, onUnblock = { onUnblock(host.host) })
+                    items(entries, key = { it.host }) { entry ->
+                        AclRow(
+                            entry = entry,
+                            onAllow = { onAllow(entry.host) },
+                            onBlock = { onBlock(entry.host) },
+                            onRemove = { onRemove(entry.host) }
+                        )
                     }
                 }
             }
@@ -69,7 +79,7 @@ fun BlockedHostsScreen(
             ) {
                 Icon(Icons.Outlined.Add, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Block a host manually")
+                Text("Add a host manually")
             }
         }
     }
@@ -78,7 +88,7 @@ fun BlockedHostsScreen(
         var input by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("Block a host") },
+            title = { Text("Add a host") },
             text = {
                 OutlinedTextField(
                     value = input,
@@ -89,19 +99,27 @@ fun BlockedHostsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (input.isNotBlank()) onBlockManually(input.trim())
+                    if (input.isNotBlank()) onBlock(input.trim())
                     showAddDialog = false
                 }) { Text("Block") }
             },
             dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) { Text("Cancel") }
+                TextButton(onClick = {
+                    if (input.isNotBlank()) onAllow(input.trim())
+                    showAddDialog = false
+                }) { Text("Allow") }
             }
         )
     }
 }
 
 @Composable
-private fun BlockedHostRow(host: BlockedHost, onUnblock: () -> Unit) {
+private fun AclRow(entry: AclEntry, onAllow: () -> Unit, onBlock: () -> Unit, onRemove: () -> Unit) {
+    val (icon, tint) = when (entry.state) {
+        AclState.ALLOWED -> Icons.Outlined.CheckCircle to MaterialTheme.colorScheme.primary
+        AclState.BLOCKED -> Icons.Outlined.Block to MaterialTheme.colorScheme.error
+        AclState.FLAGGED -> Icons.Outlined.Warning to MaterialTheme.colorScheme.tertiary
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -111,16 +129,22 @@ private fun BlockedHostRow(host: BlockedHost, onUnblock: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(Icons.Outlined.Block, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+        Icon(icon, contentDescription = entry.state.name, tint = tint)
         Column(modifier = Modifier.weight(1f)) {
-            Text(host.host, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text(entry.host, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             Text(
-                "${host.reason} · ${formatDate(host.blockedAtEpochMillis)}",
+                "${entry.reason} · ${formatDate(entry.updatedAtEpochMillis)}",
                 style = MaterialTheme.typography.labelMedium,
                 color = LocalWardenTertiaryText.current
             )
         }
-        OutlinedButton(onClick = onUnblock) { Text("Unblock") }
+        if (entry.state != AclState.ALLOWED) {
+            IconButton(onClick = onAllow) { Icon(Icons.Outlined.CheckCircle, contentDescription = "Allow") }
+        }
+        if (entry.state != AclState.BLOCKED) {
+            IconButton(onClick = onBlock) { Icon(Icons.Outlined.Block, contentDescription = "Block") }
+        }
+        IconButton(onClick = onRemove) { Icon(Icons.Outlined.Delete, contentDescription = "Remove") }
     }
 }
 

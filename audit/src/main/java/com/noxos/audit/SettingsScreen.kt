@@ -26,12 +26,14 @@ fun SettingsScreen(
     onThemeModeChange: (ThemeMode) -> Unit,
     vmSessionTimeoutSeconds: Int,
     onVmTimeoutSelected: (Int) -> Unit,
-    blockedHostsCount: Int,
-    onViewBlockedHosts: () -> Unit,
+    aclEntryCount: Int,
+    onViewAcl: () -> Unit,
     flaggedAlertsEnabled: Boolean,
     onFlaggedAlertsChange: (Boolean) -> Unit,
     scanCompletionAlertsEnabled: Boolean,
     onScanCompletionAlertsChange: (Boolean) -> Unit,
+    aiAnalysisEnabled: Boolean,
+    onAiAnalysisChange: (Boolean) -> Unit,
     retentionDays: Int,
     onRetentionDaysSelected: (Int) -> Unit,
     onExportAuditLog: () -> Unit,
@@ -63,7 +65,7 @@ fun SettingsScreen(
                     onSelect = onVmTimeoutSelected
                 )
                 SettingsSwitchRow("Auto-destroy on completion", checked = true, enabled = false, onCheckedChange = {})
-                SettingsRow("Blocked hosts", "$blockedHostsCount", onClick = onViewBlockedHosts)
+                SettingsRow("Access control list", "$aclEntryCount", onClick = onViewAcl)
             }
 
             SettingsSection("Appearance") {
@@ -83,6 +85,10 @@ fun SettingsScreen(
             SettingsSection("Notifications") {
                 SettingsSwitchRow("Flagged event alerts", flaggedAlertsEnabled, onCheckedChange = onFlaggedAlertsChange)
                 SettingsSwitchRow("Scan completion", scanCompletionAlertsEnabled, onCheckedChange = onScanCompletionAlertsChange)
+            }
+
+            SettingsSection("Threat analysis") {
+                SettingsSwitchRow("AI analysis of flagged traffic", aiAnalysisEnabled, onCheckedChange = onAiAnalysisChange)
             }
 
             SettingsSection("Data") {

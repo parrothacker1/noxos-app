@@ -7,11 +7,12 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.noxos.audit.AclRepository
+import com.noxos.audit.AclState
 import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
-import com.noxos.audit.BlockedHostRepository
 import com.noxos.audit.WardenSettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,21 +37,26 @@ class NetMonitorService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var captureJob: Job? = null
-    private var blocklistJob: Job? = null
+    private var aclJob: Job? = null
+    private var aiAnalysisSettingJob: Job? = null
 
     private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
     private val lastLoggedAt = ConcurrentHashMap<String, Long>()
+    private val flagAttempted = ConcurrentHashMap.newKeySet<String>()
     private val logThrottleMs = 5_000L
     private val udpIdleTimeoutMs = 30_000
 
     private var tcpRelay: TcpRelayManager? = null
 
     @Volatile
-    private var blockedHostsCache: Set<String> = emptySet()
+    private var aclCache: Map<String, AclState> = emptyMap()
+
+    @Volatile
+    private var aiAnalysisEnabled: Boolean = true
 
     companion object {
         var auditRepository: AuditRepository? = null
-        var blockedHostRepository: BlockedHostRepository? = null
+        var aclRepository: AclRepository? = null
         var settingsRepository: WardenSettingsRepository? = null
 
         val connectionsInspected = MutableStateFlow(0)
@@ -109,11 +115,17 @@ class NetMonitorService : VpnService() {
             return
         }
 
-        blocklistJob = blockedHostRepository?.let { hostsRepo ->
+        aclJob = aclRepository?.let { acl ->
             serviceScope.launch {
-                hostsRepo.observeAll().collect { list ->
-                    blockedHostsCache = list.map { it.host }.toSet()
+                acl.observeAll().collect { list ->
+                    aclCache = list.associate { it.host to it.state }
                 }
+            }
+        }
+
+        aiAnalysisSettingJob = settingsRepository?.let { settings ->
+            serviceScope.launch {
+                settings.aiAnalysisEnabled.collect { aiAnalysisEnabled = it }
             }
         }
 
@@ -124,10 +136,12 @@ class NetMonitorService : VpnService() {
 
     private fun stopMonitor() {
         captureJob?.cancel()
-        blocklistJob?.cancel()
+        aclJob?.cancel()
+        aiAnalysisSettingJob?.cancel()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
         lastLoggedAt.clear()
+        flagAttempted.clear()
         tcpRelay?.closeAll()
         tcpRelay = null
         vpnInterface?.close()
@@ -185,11 +199,18 @@ class NetMonitorService : VpnService() {
             val protocol = buf[9].toInt() and 0xFF
             val dstIpStr = PacketUtils.formatIp(buf, 16)
 
-            if (BlockedHostChecker.isBlocked(dstIpStr, blockedHostsCache)) {
+            val verdict = AclChecker.verdict(dstIpStr, aclCache)
+            if (verdict == AclState.BLOCKED) {
                 if (descriptor != null) {
                     logFlow(descriptor, repo, AuditOutcome.BLOCKED, flagged = false, resultSummary = "blocked host", remoteHost = dstIpStr)
                 }
                 continue
+            }
+
+            if (verdict == null && aiAnalysisEnabled && flagAttempted.add(dstIpStr)) {
+                aclRepository?.let { acl ->
+                    serviceScope.launch { acl.flagIfUnknown(dstIpStr, "new destination, pending analysis") }
+                }
             }
 
             val forwarded = when (protocol) {
@@ -206,7 +227,11 @@ class NetMonitorService : VpnService() {
                     protocol == 6 -> "tcp relay failed"
                     else -> "not relayed"
                 }
-                logFlow(descriptor, repo, AuditOutcome.SUCCESS, flagged = !forwarded, resultSummary = summary, remoteHost = dstIpStr)
+                logFlow(
+                    descriptor, repo, AuditOutcome.SUCCESS,
+                    flagged = !forwarded || verdict == AclState.FLAGGED,
+                    resultSummary = summary, remoteHost = dstIpStr
+                )
             }
         }
     }

@@ -21,6 +21,7 @@ class WardenSettingsRepository(private val context: Context) {
         val FLAGGED_ALERTS_ENABLED = booleanPreferencesKey("flagged_alerts_enabled")
         val SCAN_COMPLETION_ALERTS_ENABLED = booleanPreferencesKey("scan_completion_alerts_enabled")
         val RETENTION_DAYS = intPreferencesKey("retention_days")
+        val AI_ANALYSIS_ENABLED = booleanPreferencesKey("ai_analysis_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.wardenDataStore.data.map { prefs ->
@@ -53,5 +54,11 @@ class WardenSettingsRepository(private val context: Context) {
 
     suspend fun setAuditRetentionDays(days: Int) {
         context.wardenDataStore.edit { it[Keys.RETENTION_DAYS] = days }
+    }
+
+    val aiAnalysisEnabled: Flow<Boolean> = context.wardenDataStore.data.map { it[Keys.AI_ANALYSIS_ENABLED] ?: true }
+
+    suspend fun setAiAnalysisEnabled(enabled: Boolean) {
+        context.wardenDataStore.edit { it[Keys.AI_ANALYSIS_ENABLED] = enabled }
     }
 }
