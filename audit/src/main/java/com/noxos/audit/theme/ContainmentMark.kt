@@ -33,7 +33,7 @@ fun ContainmentMark(active: Boolean, modifier: Modifier = Modifier, diameter: Dp
     val rotationAngle by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(4000, easing = LinearEasing)),
+        animationSpec = infiniteRepeatable(tween(2000, easing = LinearEasing)),
         label = "containment-rotation"
     )
 

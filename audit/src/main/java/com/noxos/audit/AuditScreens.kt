@@ -25,6 +25,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.noxos.audit.theme.LocalWardenTertiaryText
 import java.text.SimpleDateFormat
@@ -145,10 +146,11 @@ fun AuditListItem(event: AuditEvent, onClick: () -> Unit) {
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = event.inputDescriptor,
+                text = listDescriptor(event.inputDescriptor),
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = formatTime(event.timestampEpochMillis),
@@ -360,4 +362,11 @@ fun DetailRow(label: String, value: String) {
 private fun formatTime(epochMillis: Long): String {
     val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
     return sdf.format(Date(epochMillis))
+}
+
+private fun listDescriptor(descriptor: String): String {
+    val arrow = descriptor.indexOf('→')
+    if (arrow < 0) return descriptor
+    val proto = descriptor.substringBefore(' ')
+    return "$proto → ${descriptor.substring(arrow + 1).trim()}"
 }
