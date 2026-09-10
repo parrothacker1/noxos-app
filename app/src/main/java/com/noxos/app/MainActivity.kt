@@ -5,10 +5,13 @@ import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -23,6 +26,7 @@ import androidx.lifecycle.lifecycleScope
 import com.noxos.audit.*
 import com.noxos.audit.theme.WardenTheme
 import com.noxos.netmonitor.NetMonitor
+import com.noxos.triggerrouter.FileArrivalWatcher
 import com.noxos.triggerrouter.ScanResult
 import com.noxos.triggerrouter.TriggerRouter
 import com.noxos.triggerrouter.vm.RealVmSessionFactory
@@ -35,20 +39,25 @@ sealed class Screen {
     object Home : Screen()
     object AuditList : Screen()
     data class AuditDetail(val eventId: Long) : Screen()
-    object BlockedHosts : Screen()
+    object Acl : Screen()
     object Settings : Screen()
 }
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var auditRepository: AuditRepository
-    private lateinit var blockedHostRepository: BlockedHostRepository
+    private lateinit var aclRepository: AclRepository
     private lateinit var settingsRepository: WardenSettingsRepository
     private lateinit var triggerRouter: TriggerRouter
     private lateinit var netMonitor: NetMonitor
+    private lateinit var fileArrivalWatcher: FileArrivalWatcher
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
+    ) { }
+
+    private val allFilesAccessLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
     ) { }
 
     private val vpnPermissionLauncher = registerForActivityResult(
@@ -63,16 +72,24 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         auditRepository = AuditModule.create(applicationContext)
-        blockedHostRepository = BlockedHostModule.create(applicationContext)
+        aclRepository = AclModule.create(applicationContext)
         settingsRepository = WardenSettingsRepository(applicationContext)
         triggerRouter = TriggerRouter(applicationContext, auditRepository, RealVmSessionFactory(), settingsRepository)
-        netMonitor = NetMonitor(auditRepository, blockedHostRepository, settingsRepository)
+        netMonitor = NetMonitor(auditRepository, aclRepository, settingsRepository)
+        fileArrivalWatcher = FileArrivalWatcher(applicationContext) { uri -> handleAutoScan(uri) }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            allFilesAccessLauncher.launch(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
+            )
+        }
+        fileArrivalWatcher.start()
 
         lifecycleScope.launch {
             val retentionDays = settingsRepository.auditRetentionDays.first()
@@ -98,12 +115,13 @@ class MainActivity : ComponentActivity() {
 
             val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.DARK)
             val events by auditRepository.observeAll().collectAsState(initial = emptyList())
-            val blockedHosts by blockedHostRepository.observeAll().collectAsState(initial = emptyList())
+            val aclEntries by aclRepository.observeAll().collectAsState(initial = emptyList())
             val scanProgress by triggerRouter.progress.collectAsState()
             val connectionsInspected by netMonitor.connectionsInspected.collectAsState()
             val vmTimeout by settingsRepository.vmSessionTimeoutSeconds.collectAsState(initial = 60)
             val flaggedAlerts by settingsRepository.flaggedEventAlertsEnabled.collectAsState(initial = true)
             val scanCompletionAlerts by settingsRepository.scanCompletionAlertsEnabled.collectAsState(initial = true)
+            val aiAnalysisEnabled by settingsRepository.aiAnalysisEnabled.collectAsState(initial = true)
             val retentionDays by settingsRepository.auditRetentionDays.collectAsState(initial = 90)
 
             val exportLauncher = rememberLauncherForActivityResult(
@@ -186,10 +204,10 @@ class MainActivity : ComponentActivity() {
                                     onBlockHost = {
                                         event.remoteHost?.let { host ->
                                             coroutineScope.launch {
-                                                blockedHostRepository.block(host, "blocked from EVT-${event.id}")
+                                                aclRepository.block(host, "blocked from EVT-${event.id}")
                                             }
                                         }
-                                        currentScreen = Screen.BlockedHosts
+                                        currentScreen = Screen.Acl
                                     },
                                     onExport = {
                                         pendingExportJson = AuditExport.toJson(event)
@@ -199,13 +217,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        is Screen.BlockedHosts -> BlockedHostsScreen(
-                            hosts = blockedHosts,
+                        is Screen.Acl -> AclScreen(
+                            entries = aclEntries,
                             onBack = { currentScreen = Screen.Home },
-                            onUnblock = { host -> coroutineScope.launch { blockedHostRepository.unblock(host) } },
-                            onBlockManually = { host ->
-                                coroutineScope.launch { blockedHostRepository.block(host, "blocked manually") }
-                            }
+                            onAllow = { host -> coroutineScope.launch { aclRepository.allow(host, "allowed manually") } },
+                            onBlock = { host -> coroutineScope.launch { aclRepository.block(host, "blocked manually") } },
+                            onRemove = { host -> coroutineScope.launch { aclRepository.remove(host) } }
                         )
 
                         is Screen.Settings -> SettingsScreen(
@@ -215,8 +232,8 @@ class MainActivity : ComponentActivity() {
                             onVmTimeoutSelected = { seconds ->
                                 coroutineScope.launch { settingsRepository.setVmSessionTimeoutSeconds(seconds) }
                             },
-                            blockedHostsCount = blockedHosts.size,
-                            onViewBlockedHosts = { currentScreen = Screen.BlockedHosts },
+                            aclEntryCount = aclEntries.size,
+                            onViewAcl = { currentScreen = Screen.Acl },
                             flaggedAlertsEnabled = flaggedAlerts,
                             onFlaggedAlertsChange = { enabled ->
                                 coroutineScope.launch { settingsRepository.setFlaggedEventAlertsEnabled(enabled) }
@@ -224,6 +241,10 @@ class MainActivity : ComponentActivity() {
                             scanCompletionAlertsEnabled = scanCompletionAlerts,
                             onScanCompletionAlertsChange = { enabled ->
                                 coroutineScope.launch { settingsRepository.setScanCompletionAlertsEnabled(enabled) }
+                            },
+                            aiAnalysisEnabled = aiAnalysisEnabled,
+                            onAiAnalysisChange = { enabled ->
+                                coroutineScope.launch { settingsRepository.setAiAnalysisEnabled(enabled) }
                             },
                             retentionDays = retentionDays,
                             onRetentionDaysSelected = { days ->
@@ -241,6 +262,21 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        fileArrivalWatcher.stop()
+        super.onDestroy()
+    }
+
+    private fun handleAutoScan(uri: Uri) {
+        val filename = uri.lastPathSegment ?: "unknown_file"
+        lifecycleScope.launch {
+            val result = triggerRouter.scanFile(uri, filename)
+            if (settingsRepository.scanCompletionAlertsEnabled.first()) {
+                postScanCompletionNotification(filename, result)
             }
         }
     }

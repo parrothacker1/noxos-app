@@ -14,4 +14,10 @@ class AuditConverters {
 
     @TypeConverter
     fun toOutcome(value: String): AuditOutcome = AuditOutcome.valueOf(value)
+
+    @TypeConverter
+    fun fromAclState(value: AclState): String = value.name
+
+    @TypeConverter
+    fun toAclState(value: String): AclState = AclState.valueOf(value)
 }
