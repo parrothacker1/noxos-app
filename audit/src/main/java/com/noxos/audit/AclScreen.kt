@@ -29,9 +29,9 @@ import java.util.Locale
 fun AclScreen(
     entries: List<AclEntry>,
     onBack: () -> Unit,
-    onAllow: (String) -> Unit,
-    onBlock: (String) -> Unit,
-    onRemove: (String) -> Unit,
+    onAllow: (AclKind, String) -> Unit,
+    onBlock: (AclKind, String) -> Unit,
+    onRemove: (AclKind, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
@@ -49,8 +49,8 @@ fun AclScreen(
     ) { innerPadding ->
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 20.dp)) {
             Text(
-                "Blocked hosts are terminated before they reach the real network stack. " +
-                    "Flagged hosts are new destinations awaiting analysis — traffic still flows.",
+                "Blocked entries are terminated before they reach the real network stack or scanner. " +
+                    "Flagged entries are new and awaiting analysis — traffic and files still flow.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 12.dp)
@@ -58,16 +58,16 @@ fun AclScreen(
 
             if (entries.isEmpty()) {
                 Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
-                    Text("No hosts in the ACL yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("No entries in the ACL yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(entries, key = { it.host }) { entry ->
+                    items(entries, key = { "${it.kind}:${it.subject}" }) { entry ->
                         AclRow(
                             entry = entry,
-                            onAllow = { onAllow(entry.host) },
-                            onBlock = { onBlock(entry.host) },
-                            onRemove = { onRemove(entry.host) }
+                            onAllow = { onAllow(entry.kind, entry.subject) },
+                            onBlock = { onBlock(entry.kind, entry.subject) },
+                            onRemove = { onRemove(entry.kind, entry.subject) }
                         )
                     }
                 }
@@ -79,33 +79,48 @@ fun AclScreen(
             ) {
                 Icon(Icons.Outlined.Add, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Add a host manually")
+                Text("Add an entry manually")
             }
         }
     }
 
     if (showAddDialog) {
         var input by remember { mutableStateOf("") }
+        var selectedKind by remember { mutableStateOf(AclKind.NETWORK) }
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("Add a host") },
+            title = { Text("Add an entry") },
             text = {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    singleLine = true,
-                    label = { Text("IP address") }
-                )
+                Column {
+                    SingleChoiceSegmentedButtonRow {
+                        AclKind.entries.forEachIndexed { index, kind ->
+                            SegmentedButton(
+                                selected = selectedKind == kind,
+                                onClick = { selectedKind = kind },
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = AclKind.entries.size)
+                            ) {
+                                Text(if (kind == AclKind.NETWORK) "Host" else "App source")
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        singleLine = true,
+                        label = { Text(if (selectedKind == AclKind.NETWORK) "IP address" else "Package name") }
+                    )
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (input.isNotBlank()) onBlock(input.trim())
+                    if (input.isNotBlank()) onBlock(selectedKind, input.trim())
                     showAddDialog = false
                 }) { Text("Block") }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    if (input.isNotBlank()) onAllow(input.trim())
+                    if (input.isNotBlank()) onAllow(selectedKind, input.trim())
                     showAddDialog = false
                 }) { Text("Allow") }
             }
@@ -120,6 +135,8 @@ private fun AclRow(entry: AclEntry, onAllow: () -> Unit, onBlock: () -> Unit, on
         AclState.BLOCKED -> Icons.Outlined.Block to MaterialTheme.colorScheme.error
         AclState.FLAGGED -> Icons.Outlined.Warning to MaterialTheme.colorScheme.tertiary
     }
+    val kindLabel = if (entry.kind == AclKind.NETWORK) "Network" else "App source"
+    val priorityLabel = if (entry.state == AclState.FLAGGED && entry.priority == AclPriority.HIGH) " · high priority" else ""
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -131,9 +148,9 @@ private fun AclRow(entry: AclEntry, onAllow: () -> Unit, onBlock: () -> Unit, on
     ) {
         Icon(icon, contentDescription = entry.state.name, tint = tint)
         Column(modifier = Modifier.weight(1f)) {
-            Text(entry.host, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+            Text(entry.subject, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             Text(
-                "${entry.reason} · ${formatDate(entry.updatedAtEpochMillis)}",
+                "$kindLabel · ${entry.reason} · ${formatDate(entry.updatedAtEpochMillis)}$priorityLabel",
                 style = MaterialTheme.typography.labelMedium,
                 color = LocalWardenTertiaryText.current
             )

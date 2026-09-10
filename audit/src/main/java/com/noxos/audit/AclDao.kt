@@ -14,9 +14,15 @@ interface AclDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIfAbsent(entity: AclEntity)
 
-    @Query("DELETE FROM acl_entries WHERE host = :host")
-    suspend fun remove(host: String)
+    @Query("DELETE FROM acl_entries WHERE kind = :kind AND subject = :subject")
+    suspend fun remove(kind: AclKind, subject: String)
 
     @Query("SELECT * FROM acl_entries ORDER BY updatedAtEpochMillis DESC")
     fun observeAll(): Flow<List<AclEntity>>
+
+    @Query("SELECT * FROM acl_entries WHERE kind = :kind ORDER BY updatedAtEpochMillis DESC")
+    fun observeByKind(kind: AclKind): Flow<List<AclEntity>>
+
+    @Query("SELECT * FROM acl_entries WHERE kind = :kind AND state = :state")
+    suspend fun entriesByKindAndState(kind: AclKind, state: AclState): List<AclEntity>
 }

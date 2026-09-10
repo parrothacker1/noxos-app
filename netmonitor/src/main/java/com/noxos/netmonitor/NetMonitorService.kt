@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.noxos.audit.AclKind
 import com.noxos.audit.AclRepository
 import com.noxos.audit.AclState
 import com.noxos.audit.AuditEvent
@@ -117,8 +118,8 @@ class NetMonitorService : VpnService() {
 
         aclJob = aclRepository?.let { acl ->
             serviceScope.launch {
-                acl.observeAll().collect { list ->
-                    aclCache = list.associate { it.host to it.state }
+                acl.observeKind(AclKind.NETWORK).collect { list ->
+                    aclCache = list.associate { it.subject to it.state }
                 }
             }
         }
@@ -208,8 +209,11 @@ class NetMonitorService : VpnService() {
             }
 
             if (verdict == null && aiAnalysisEnabled && flagAttempted.add(dstIpStr)) {
+                val priority = NetworkPriority.classify(PacketUtils.destPort(buf, len))
                 aclRepository?.let { acl ->
-                    serviceScope.launch { acl.flagIfUnknown(dstIpStr, "new destination, pending analysis") }
+                    serviceScope.launch {
+                        acl.flagIfUnknown(AclKind.NETWORK, dstIpStr, priority, "new destination, pending analysis")
+                    }
                 }
             }
 

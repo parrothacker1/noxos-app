@@ -8,7 +8,7 @@ import androidx.room.TypeConverters
 
 @Database(
     entities = [AuditEntryEntity::class, AclEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(AuditConverters::class)

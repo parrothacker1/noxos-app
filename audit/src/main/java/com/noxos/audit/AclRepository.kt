@@ -5,43 +5,69 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 data class AclEntry(
-    val host: String,
+    val kind: AclKind,
+    val subject: String,
     val state: AclState,
+    val priority: AclPriority,
     val reason: String,
     val updatedAtEpochMillis: Long
 )
 
 interface AclRepository {
-    suspend fun allow(host: String, reason: String)
-    suspend fun block(host: String, reason: String)
-    suspend fun flagIfUnknown(host: String, reason: String)
-    suspend fun remove(host: String)
+    suspend fun allow(kind: AclKind, subject: String, reason: String)
+    suspend fun block(kind: AclKind, subject: String, reason: String)
+    suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String)
+    suspend fun remove(kind: AclKind, subject: String)
     fun observeAll(): Flow<List<AclEntry>>
+    fun observeKind(kind: AclKind): Flow<List<AclEntry>>
+
+    /** Up to [limit] flagged network entries, highest priority and oldest first. */
+    suspend fun nextAnalysisBatch(limit: Int): List<AclEntry>
+
+    /** Seeds well-known-safe network hosts. Never overwrites an existing entry (user or AI set). */
+    suspend fun seedDefaults()
 }
 
 class RoomAclRepository(private val dao: AclDao) : AclRepository {
 
-    override suspend fun allow(host: String, reason: String) {
-        dao.upsert(AclEntity(host, AclState.ALLOWED, reason, System.currentTimeMillis()))
+    override suspend fun allow(kind: AclKind, subject: String, reason: String) {
+        dao.upsert(AclEntity(kind, subject, AclState.ALLOWED, AclPriority.LOW, reason, System.currentTimeMillis()))
     }
 
-    override suspend fun block(host: String, reason: String) {
-        dao.upsert(AclEntity(host, AclState.BLOCKED, reason, System.currentTimeMillis()))
+    override suspend fun block(kind: AclKind, subject: String, reason: String) {
+        dao.upsert(AclEntity(kind, subject, AclState.BLOCKED, AclPriority.LOW, reason, System.currentTimeMillis()))
     }
 
-    override suspend fun flagIfUnknown(host: String, reason: String) {
-        dao.insertIfAbsent(AclEntity(host, AclState.FLAGGED, reason, System.currentTimeMillis()))
+    override suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String) {
+        dao.insertIfAbsent(AclEntity(kind, subject, AclState.FLAGGED, priority, reason, System.currentTimeMillis()))
     }
 
-    override suspend fun remove(host: String) {
-        dao.remove(host)
+    override suspend fun remove(kind: AclKind, subject: String) {
+        dao.remove(kind, subject)
     }
 
-    override fun observeAll(): Flow<List<AclEntry>> {
-        return dao.observeAll().map { list ->
-            list.map { entity -> AclEntry(entity.host, entity.state, entity.reason, entity.updatedAtEpochMillis) }
+    override fun observeAll(): Flow<List<AclEntry>> =
+        dao.observeAll().map { list -> list.map { it.toEntry() } }
+
+    override fun observeKind(kind: AclKind): Flow<List<AclEntry>> =
+        dao.observeByKind(kind).map { list -> list.map { it.toEntry() } }
+
+    override suspend fun nextAnalysisBatch(limit: Int): List<AclEntry> {
+        return dao.entriesByKindAndState(AclKind.NETWORK, AclState.FLAGGED)
+            .sortedWith(compareByDescending<AclEntity> { it.priority == AclPriority.HIGH }.thenBy { it.updatedAtEpochMillis })
+            .take(limit)
+            .map { it.toEntry() }
+    }
+
+    override suspend fun seedDefaults() {
+        AclSeed.WELL_KNOWN_SAFE.forEach { host ->
+            dao.insertIfAbsent(
+                AclEntity(AclKind.NETWORK, host, AclState.ALLOWED, AclPriority.LOW, AclSeed.REASON, System.currentTimeMillis())
+            )
         }
     }
+
+    private fun AclEntity.toEntry() = AclEntry(kind, subject, state, priority, reason, updatedAtEpochMillis)
 }
 
 object AclModule {

@@ -20,4 +20,16 @@ class AuditConverters {
 
     @TypeConverter
     fun toAclState(value: String): AclState = AclState.valueOf(value)
+
+    @TypeConverter
+    fun fromAclKind(value: AclKind): String = value.name
+
+    @TypeConverter
+    fun toAclKind(value: String): AclKind = AclKind.valueOf(value)
+
+    @TypeConverter
+    fun fromAclPriority(value: AclPriority): String = value.name
+
+    @TypeConverter
+    fun toAclPriority(value: String): AclPriority = AclPriority.valueOf(value)
 }

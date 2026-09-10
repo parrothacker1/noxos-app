@@ -162,4 +162,13 @@ internal object PacketUtils {
 
         return "$protoName $srcIp → $dstIp"
     }
+
+    fun destPort(packet: ByteArray, len: Int): Int? {
+        if (len < 24) return null
+        val protocol = packet[9].toInt() and 0xFF
+        if (protocol != 6 && protocol != 17) return null
+        val ihl = (packet[0].toInt() and 0x0F) * 4
+        if (ihl + 4 > len) return null
+        return readUShort(packet, ihl + 2)
+    }
 }

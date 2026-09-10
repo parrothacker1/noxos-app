@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
         settingsRepository = WardenSettingsRepository(applicationContext)
         triggerRouter = TriggerRouter(applicationContext, auditRepository, RealVmSessionFactory(), settingsRepository)
         netMonitor = NetMonitor(auditRepository, aclRepository, settingsRepository)
-        fileArrivalWatcher = FileArrivalWatcher(applicationContext) { uri -> handleAutoScan(uri) }
+        fileArrivalWatcher = FileArrivalWatcher(applicationContext, aclRepository) { uri -> handleAutoScan(uri) }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
             val retentionDays = settingsRepository.auditRetentionDays.first()
             auditRepository.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), retentionDays))
         }
+        lifecycleScope.launch { aclRepository.seedDefaults() }
 
         val versionLabel = runCatching {
             val info = packageManager.getPackageInfo(packageName, 0)
@@ -204,7 +205,7 @@ class MainActivity : ComponentActivity() {
                                     onBlockHost = {
                                         event.remoteHost?.let { host ->
                                             coroutineScope.launch {
-                                                aclRepository.block(host, "blocked from EVT-${event.id}")
+                                                aclRepository.block(AclKind.NETWORK, host, "blocked from EVT-${event.id}")
                                             }
                                         }
                                         currentScreen = Screen.Acl
@@ -220,9 +221,9 @@ class MainActivity : ComponentActivity() {
                         is Screen.Acl -> AclScreen(
                             entries = aclEntries,
                             onBack = { currentScreen = Screen.Home },
-                            onAllow = { host -> coroutineScope.launch { aclRepository.allow(host, "allowed manually") } },
-                            onBlock = { host -> coroutineScope.launch { aclRepository.block(host, "blocked manually") } },
-                            onRemove = { host -> coroutineScope.launch { aclRepository.remove(host) } }
+                            onAllow = { kind, subject -> coroutineScope.launch { aclRepository.allow(kind, subject, "allowed manually") } },
+                            onBlock = { kind, subject -> coroutineScope.launch { aclRepository.block(kind, subject, "blocked manually") } },
+                            onRemove = { kind, subject -> coroutineScope.launch { aclRepository.remove(kind, subject) } }
                         )
 
                         is Screen.Settings -> SettingsScreen(
