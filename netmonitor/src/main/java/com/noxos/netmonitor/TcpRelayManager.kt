@@ -111,6 +111,7 @@ internal class TcpRelayManager(
         session.ourSeq = Random.nextLong(0, 0x100000000L)
 
         val connected = runCatching {
+            session.socket.bind(InetSocketAddress(0))
             val protectedOk = protect(session.socket)
             Log.d(TAG, "protect() returned $protectedOk for $key")
             session.socket.connect(InetSocketAddress(InetAddress.getByAddress(dstIp), dstPort), 10_000)
