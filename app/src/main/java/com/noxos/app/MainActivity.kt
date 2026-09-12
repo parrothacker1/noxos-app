@@ -123,6 +123,8 @@ class MainActivity : ComponentActivity() {
             val flaggedAlerts by settingsRepository.flaggedEventAlertsEnabled.collectAsState(initial = true)
             val scanCompletionAlerts by settingsRepository.scanCompletionAlertsEnabled.collectAsState(initial = true)
             val aiAnalysisEnabled by settingsRepository.aiAnalysisEnabled.collectAsState(initial = true)
+            val inferenceEndpointUrl by settingsRepository.inferenceEndpointUrl.collectAsState(initial = "")
+            val inferenceApiKey by settingsRepository.inferenceApiKey.collectAsState(initial = "")
             val retentionDays by settingsRepository.auditRetentionDays.collectAsState(initial = 90)
 
             val exportLauncher = rememberLauncherForActivityResult(
@@ -246,6 +248,14 @@ class MainActivity : ComponentActivity() {
                             aiAnalysisEnabled = aiAnalysisEnabled,
                             onAiAnalysisChange = { enabled ->
                                 coroutineScope.launch { settingsRepository.setAiAnalysisEnabled(enabled) }
+                            },
+                            inferenceEndpointUrl = inferenceEndpointUrl,
+                            onInferenceEndpointUrlChange = { url ->
+                                coroutineScope.launch { settingsRepository.setInferenceEndpointUrl(url) }
+                            },
+                            inferenceApiKey = inferenceApiKey,
+                            onInferenceApiKeyChange = { key ->
+                                coroutineScope.launch { settingsRepository.setInferenceApiKey(key) }
                             },
                             retentionDays = retentionDays,
                             onRetentionDaysSelected = { days ->

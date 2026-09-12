@@ -22,6 +22,8 @@ class WardenSettingsRepository(private val context: Context) {
         val SCAN_COMPLETION_ALERTS_ENABLED = booleanPreferencesKey("scan_completion_alerts_enabled")
         val RETENTION_DAYS = intPreferencesKey("retention_days")
         val AI_ANALYSIS_ENABLED = booleanPreferencesKey("ai_analysis_enabled")
+        val INFERENCE_ENDPOINT_URL = stringPreferencesKey("inference_endpoint_url")
+        val INFERENCE_API_KEY = stringPreferencesKey("inference_api_key")
     }
 
     val themeMode: Flow<ThemeMode> = context.wardenDataStore.data.map { prefs ->
@@ -60,5 +62,17 @@ class WardenSettingsRepository(private val context: Context) {
 
     suspend fun setAiAnalysisEnabled(enabled: Boolean) {
         context.wardenDataStore.edit { it[Keys.AI_ANALYSIS_ENABLED] = enabled }
+    }
+
+    val inferenceEndpointUrl: Flow<String> = context.wardenDataStore.data.map { it[Keys.INFERENCE_ENDPOINT_URL] ?: "" }
+
+    suspend fun setInferenceEndpointUrl(url: String) {
+        context.wardenDataStore.edit { it[Keys.INFERENCE_ENDPOINT_URL] = url }
+    }
+
+    val inferenceApiKey: Flow<String> = context.wardenDataStore.data.map { it[Keys.INFERENCE_API_KEY] ?: "" }
+
+    suspend fun setInferenceApiKey(key: String) {
+        context.wardenDataStore.edit { it[Keys.INFERENCE_API_KEY] = key }
     }
 }

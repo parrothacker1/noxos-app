@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -40,6 +41,7 @@ class NetMonitorService : VpnService() {
     private var captureJob: Job? = null
     private var aclJob: Job? = null
     private var aiAnalysisSettingJob: Job? = null
+    private var analysisDispatchJob: Job? = null
 
     private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
     private val lastLoggedAt = ConcurrentHashMap<String, Long>()
@@ -98,6 +100,11 @@ class NetMonitorService : VpnService() {
             .setSession("Warden Network Monitor")
             .addAddress("10.0.0.1", 32)
             .addRoute("0.0.0.0", 0)
+        try {
+            builder.addDisallowedApplication(packageName)
+        } catch (e: PackageManager.NameNotFoundException) {
+            Log.e(TAG, "addDisallowedApplication(self) failed", e)
+        }
 
         val iface = builder.establish()
         if (iface == null) {
@@ -130,6 +137,12 @@ class NetMonitorService : VpnService() {
             }
         }
 
+        val acl = aclRepository
+        val settings = settingsRepository
+        analysisDispatchJob = if (acl != null && settings != null) {
+            serviceScope.launch { AnalysisDispatcher(acl, settings).run() }
+        } else null
+
         captureJob = serviceScope.launch {
             runCaptureLoop(vpnInterface!!, repo)
         }
@@ -139,6 +152,7 @@ class NetMonitorService : VpnService() {
         captureJob?.cancel()
         aclJob?.cancel()
         aiAnalysisSettingJob?.cancel()
+        analysisDispatchJob?.cancel()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
         lastLoggedAt.clear()

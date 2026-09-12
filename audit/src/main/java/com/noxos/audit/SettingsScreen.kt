@@ -14,6 +14,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 
 private val vmTimeoutOptionsSeconds = listOf(15, 30, 60, 120)
@@ -34,6 +36,10 @@ fun SettingsScreen(
     onScanCompletionAlertsChange: (Boolean) -> Unit,
     aiAnalysisEnabled: Boolean,
     onAiAnalysisChange: (Boolean) -> Unit,
+    inferenceEndpointUrl: String,
+    onInferenceEndpointUrlChange: (String) -> Unit,
+    inferenceApiKey: String,
+    onInferenceApiKeyChange: (String) -> Unit,
     retentionDays: Int,
     onRetentionDaysSelected: (Int) -> Unit,
     onExportAuditLog: () -> Unit,
@@ -89,6 +95,21 @@ fun SettingsScreen(
 
             SettingsSection("Threat analysis") {
                 SettingsSwitchRow("AI analysis of flagged traffic", aiAnalysisEnabled, onCheckedChange = onAiAnalysisChange)
+                SettingsTextEditRow(
+                    label = "Inference endpoint",
+                    value = inferenceEndpointUrl,
+                    placeholder = "Not configured",
+                    fieldLabel = "https://host:8443",
+                    onSave = onInferenceEndpointUrlChange
+                )
+                SettingsTextEditRow(
+                    label = "Inference API key",
+                    value = inferenceApiKey,
+                    placeholder = "Not configured",
+                    fieldLabel = "API key",
+                    masked = true,
+                    onSave = onInferenceApiKeyChange
+                )
             }
 
             SettingsSection("Data") {
@@ -176,6 +197,45 @@ private fun <T> SettingsDropdownRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsTextEditRow(
+    label: String,
+    value: String,
+    placeholder: String,
+    fieldLabel: String,
+    masked: Boolean = false,
+    onSave: (String) -> Unit
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    SettingsRow(label, if (value.isBlank()) placeholder else if (masked) "••••••••" else value) { showDialog = true }
+
+    if (showDialog) {
+        var input by remember { mutableStateOf(value) }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(label) },
+            text = {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    singleLine = true,
+                    label = { Text(fieldLabel) },
+                    visualTransformation = if (masked) PasswordVisualTransformation() else VisualTransformation.None
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onSave(input.trim())
+                    showDialog = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
