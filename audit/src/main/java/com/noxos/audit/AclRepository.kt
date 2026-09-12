@@ -11,8 +11,8 @@ data class AclEntry(
     val priority: AclPriority,
     val reason: String,
     val updatedAtEpochMillis: Long,
-    val safetyScore: Float?,
-    val sessionOnly: Boolean
+    val safetyScore: Float? = null,
+    val sessionOnly: Boolean = false
 )
 
 interface AclRepository {
