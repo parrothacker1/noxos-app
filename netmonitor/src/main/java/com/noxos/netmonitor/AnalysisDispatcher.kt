@@ -20,7 +20,7 @@ class AnalysisDispatcher(
     suspend fun run() {
         while (true) {
             val endpoint = settingsRepository.inferenceEndpointUrl.first().trim().trimEnd('/')
-            val aiEnabled = settingsRepository.aiAnalysisEnabled.first()
+            val aiEnabled = settingsRepository.aiNetworkAnalysisEnabled.first()
 
             if (endpoint.isNotBlank() && aiEnabled) {
                 val apiKey = settingsRepository.inferenceApiKey.first()
@@ -34,12 +34,15 @@ class AnalysisDispatcher(
     }
 
     private suspend fun resolve(endpoint: String, apiKey: String, entry: AclEntry) {
-        val verdict = withContext(Dispatchers.IO) { requestVerdict(endpoint, apiKey, entry) }
-        when (verdict) {
-            "allow" -> aclRepository.allow(AclKind.NETWORK, entry.subject, "ai: allowed")
-            "block" -> aclRepository.block(AclKind.NETWORK, entry.subject, "ai: blocked")
+        val response = withContext(Dispatchers.IO) { requestVerdict(endpoint, apiKey, entry) } ?: return
+        val reason = response.reasoning?.let { "ai: $it" } ?: "ai: ${response.verdict}"
+        when (response.verdict) {
+            "allow" -> aclRepository.allow(AclKind.NETWORK, entry.subject, reason, response.safetyScore, sessionOnly = true)
+            "block" -> aclRepository.block(AclKind.NETWORK, entry.subject, reason, response.safetyScore, sessionOnly = true)
         }
     }
+
+    internal data class NetworkVerdict(val verdict: String, val reasoning: String?, val safetyScore: Float?)
 
     companion object {
         private const val TAG = "WardenAnalysisDispatcher"
@@ -47,11 +50,16 @@ class AnalysisDispatcher(
         private const val BATCH_SIZE = 10
         private const val TIMEOUT_MS = 10_000
         private val VERDICT_FIELD = Regex(""""verdict"\s*:\s*"([a-zA-Z_]+)"""")
+        private val REASONING_FIELD = Regex(""""reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"""")
+        private val SAFETY_SCORE_FIELD = Regex(""""safety_score"\s*:\s*([0-9]*\.?[0-9]+)""")
 
         private fun jsonEscaped(value: String) =
             "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-        internal fun requestVerdict(endpoint: String, apiKey: String, entry: AclEntry): String? {
+        private fun jsonUnescaped(value: String) =
+            value.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\")
+
+        internal fun requestVerdict(endpoint: String, apiKey: String, entry: AclEntry): NetworkVerdict? {
             return try {
                 val connection = URL("$endpoint/analyze/network").openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
@@ -74,7 +82,10 @@ class AnalysisDispatcher(
                     return null
                 }
                 val response = connection.inputStream.bufferedReader().use { it.readText() }
-                VERDICT_FIELD.find(response)?.groupValues?.get(1) ?: "uncertain"
+                val verdict = VERDICT_FIELD.find(response)?.groupValues?.get(1) ?: return null
+                val reasoning = REASONING_FIELD.find(response)?.groupValues?.get(1)?.let(::jsonUnescaped)
+                val safetyScore = SAFETY_SCORE_FIELD.find(response)?.groupValues?.get(1)?.toFloatOrNull()
+                NetworkVerdict(verdict, reasoning, safetyScore)
             } catch (e: Exception) {
                 Log.w(TAG, "analyze/network request failed for ${entry.subject}", e)
                 null

@@ -89,4 +89,37 @@ class RoomAclRepositoryTest {
         assertEquals(AclSeed.WELL_KNOWN_SAFE.size, entries.size)
         assertTrue(entries.all { it.state == AclState.ALLOWED && it.reason == AclSeed.REASON })
     }
+
+    @Test
+    fun testClearSessionVerdictsOnlyRemovesSessionScopedEntries() = runBlocking {
+        repository.block(AclKind.NETWORK, "permanent.example", "blocked manually")
+        repository.allow(AclKind.NETWORK, "ai-allowed.example", "ai: looks fine", safetyScore = 0.95f, sessionOnly = true)
+        repository.block(AclKind.NETWORK, "ai-blocked.example", "ai: known bad actor", safetyScore = 0.02f, sessionOnly = true)
+
+        repository.clearSessionVerdicts(AclKind.NETWORK)
+
+        val remaining = repository.observeKind(AclKind.NETWORK).first()
+        assertEquals(1, remaining.size)
+        assertEquals("permanent.example", remaining.single().subject)
+    }
+
+    @Test
+    fun testClearSessionVerdictsIsScopedToKind() = runBlocking {
+        repository.allow(AclKind.NETWORK, "1.2.3.4", "ai: fine", sessionOnly = true)
+        repository.allow(AclKind.FILE_SOURCE, "com.example.app", "ai: fine", sessionOnly = true)
+
+        repository.clearSessionVerdicts(AclKind.NETWORK)
+
+        assertTrue(repository.observeKind(AclKind.NETWORK).first().isEmpty())
+        assertEquals(1, repository.observeKind(AclKind.FILE_SOURCE).first().size)
+    }
+
+    @Test
+    fun testAllowAndBlockPersistSafetyScore() = runBlocking {
+        repository.block(AclKind.NETWORK, "1.2.3.4", "ai: bad", safetyScore = 0.1f, sessionOnly = true)
+
+        val entry = repository.observeKind(AclKind.NETWORK).first().single()
+        assertEquals(0.1f, entry.safetyScore)
+        assertTrue(entry.sessionOnly)
+    }
 }

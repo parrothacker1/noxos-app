@@ -122,7 +122,8 @@ class MainActivity : ComponentActivity() {
             val vmTimeout by settingsRepository.vmSessionTimeoutSeconds.collectAsState(initial = 60)
             val flaggedAlerts by settingsRepository.flaggedEventAlertsEnabled.collectAsState(initial = true)
             val scanCompletionAlerts by settingsRepository.scanCompletionAlertsEnabled.collectAsState(initial = true)
-            val aiAnalysisEnabled by settingsRepository.aiAnalysisEnabled.collectAsState(initial = true)
+            val aiNetworkAnalysisEnabled by settingsRepository.aiNetworkAnalysisEnabled.collectAsState(initial = true)
+            val aiFileAnalysisEnabled by settingsRepository.aiFileAnalysisEnabled.collectAsState(initial = true)
             val inferenceEndpointUrl by settingsRepository.inferenceEndpointUrl.collectAsState(initial = "")
             val inferenceApiKey by settingsRepository.inferenceApiKey.collectAsState(initial = "")
             val retentionDays by settingsRepository.auditRetentionDays.collectAsState(initial = 90)
@@ -245,9 +246,13 @@ class MainActivity : ComponentActivity() {
                             onScanCompletionAlertsChange = { enabled ->
                                 coroutineScope.launch { settingsRepository.setScanCompletionAlertsEnabled(enabled) }
                             },
-                            aiAnalysisEnabled = aiAnalysisEnabled,
-                            onAiAnalysisChange = { enabled ->
-                                coroutineScope.launch { settingsRepository.setAiAnalysisEnabled(enabled) }
+                            aiNetworkAnalysisEnabled = aiNetworkAnalysisEnabled,
+                            onAiNetworkAnalysisChange = { enabled ->
+                                coroutineScope.launch { settingsRepository.setAiNetworkAnalysisEnabled(enabled) }
+                            },
+                            aiFileAnalysisEnabled = aiFileAnalysisEnabled,
+                            onAiFileAnalysisChange = { enabled ->
+                                coroutineScope.launch { settingsRepository.setAiFileAnalysisEnabled(enabled) }
                             },
                             inferenceEndpointUrl = inferenceEndpointUrl,
                             onInferenceEndpointUrlChange = { url ->

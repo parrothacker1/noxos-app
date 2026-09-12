@@ -9,5 +9,7 @@ data class AclEntity(
     val state: AclState,
     val priority: AclPriority,
     val reason: String,
-    val updatedAtEpochMillis: Long
+    val updatedAtEpochMillis: Long,
+    val safetyScore: Float? = null,
+    val sessionOnly: Boolean = false
 )

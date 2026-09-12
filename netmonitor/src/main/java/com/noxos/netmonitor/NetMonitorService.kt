@@ -55,7 +55,7 @@ class NetMonitorService : VpnService() {
     private var aclCache: Map<String, AclState> = emptyMap()
 
     @Volatile
-    private var aiAnalysisEnabled: Boolean = true
+    private var aiNetworkAnalysisEnabled: Boolean = true
 
     companion object {
         var auditRepository: AuditRepository? = null
@@ -123,6 +123,8 @@ class NetMonitorService : VpnService() {
             return
         }
 
+        aclRepository?.let { acl -> serviceScope.launch { acl.clearSessionVerdicts(AclKind.NETWORK) } }
+
         aclJob = aclRepository?.let { acl ->
             serviceScope.launch {
                 acl.observeKind(AclKind.NETWORK).collect { list ->
@@ -133,7 +135,7 @@ class NetMonitorService : VpnService() {
 
         aiAnalysisSettingJob = settingsRepository?.let { settings ->
             serviceScope.launch {
-                settings.aiAnalysisEnabled.collect { aiAnalysisEnabled = it }
+                settings.aiNetworkAnalysisEnabled.collect { aiNetworkAnalysisEnabled = it }
             }
         }
 
@@ -222,7 +224,7 @@ class NetMonitorService : VpnService() {
                 continue
             }
 
-            if (verdict == null && aiAnalysisEnabled && flagAttempted.add(dstIpStr)) {
+            if (verdict == null && aiNetworkAnalysisEnabled && flagAttempted.add(dstIpStr)) {
                 val priority = NetworkPriority.classify(PacketUtils.destPort(buf, len))
                 aclRepository?.let { acl ->
                     serviceScope.launch {

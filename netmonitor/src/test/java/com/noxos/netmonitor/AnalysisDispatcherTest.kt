@@ -63,10 +63,10 @@ class AnalysisDispatcherTest {
 
     @Test
     fun `parses an allow verdict from a real HTTP response`() {
-        val server = FakeServer(200, """{"verdict":"allow","confidence":0.9}""").start()
+        val server = FakeServer(200, """{"verdict":"allow","safety_score":0.9}""").start()
         try {
-            val verdict = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", entry())
-            assertEquals("allow", verdict)
+            val response = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", entry())
+            assertEquals("allow", response?.verdict)
         } finally {
             server.stop()
         }
@@ -76,9 +76,38 @@ class AnalysisDispatcherTest {
     fun `sends the api key as a bearer token when configured`() {
         val server = FakeServer(200, """{"verdict":"block"}""").start()
         try {
-            val verdict = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "secret-token", entry())
-            assertEquals("block", verdict)
+            val response = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "secret-token", entry())
+            assertEquals("block", response?.verdict)
             assertEquals("Bearer secret-token", server.receivedAuthHeader)
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `parses reasoning and safety score alongside the verdict`() {
+        val server = FakeServer(
+            200,
+            """{"verdict":"block","reasoning":"Known C2 beacon pattern","safety_score":0.12}"""
+        ).start()
+        try {
+            val response = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", entry())
+            assertEquals("block", response?.verdict)
+            assertEquals("Known C2 beacon pattern", response?.reasoning)
+            assertEquals(0.12f, response?.safetyScore)
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `missing reasoning and safety score parse as null, not a failure`() {
+        val server = FakeServer(200, """{"verdict":"allow"}""").start()
+        try {
+            val response = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", entry())
+            assertEquals("allow", response?.verdict)
+            assertNull(response?.reasoning)
+            assertNull(response?.safetyScore)
         } finally {
             server.stop()
         }

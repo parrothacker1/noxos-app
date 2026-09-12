@@ -154,6 +154,13 @@ private fun AclRow(entry: AclEntry, onAllow: () -> Unit, onBlock: () -> Unit, on
                 style = MaterialTheme.typography.labelMedium,
                 color = LocalWardenTertiaryText.current
             )
+            entry.safetyScore?.let { score ->
+                Text(
+                    "Safety score: ${(score * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = LocalWardenTertiaryText.current
+                )
+            }
         }
         if (entry.state != AclState.ALLOWED) {
             IconButton(onClick = onAllow) { Icon(Icons.Outlined.CheckCircle, contentDescription = "Allow") }

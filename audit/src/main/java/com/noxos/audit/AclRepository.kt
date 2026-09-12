@@ -10,12 +10,14 @@ data class AclEntry(
     val state: AclState,
     val priority: AclPriority,
     val reason: String,
-    val updatedAtEpochMillis: Long
+    val updatedAtEpochMillis: Long,
+    val safetyScore: Float?,
+    val sessionOnly: Boolean
 )
 
 interface AclRepository {
-    suspend fun allow(kind: AclKind, subject: String, reason: String)
-    suspend fun block(kind: AclKind, subject: String, reason: String)
+    suspend fun allow(kind: AclKind, subject: String, reason: String, safetyScore: Float? = null, sessionOnly: Boolean = false)
+    suspend fun block(kind: AclKind, subject: String, reason: String, safetyScore: Float? = null, sessionOnly: Boolean = false)
     suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String)
     suspend fun remove(kind: AclKind, subject: String)
     fun observeAll(): Flow<List<AclEntry>>
@@ -26,16 +28,19 @@ interface AclRepository {
 
     /** Seeds well-known-safe network hosts. Never overwrites an existing entry (user or AI set). */
     suspend fun seedDefaults()
+
+    /** Forgets AI-sourced verdicts of [kind] (sessionOnly = true) - a fresh session re-asks. Never touches user/seed entries. */
+    suspend fun clearSessionVerdicts(kind: AclKind)
 }
 
 class RoomAclRepository(private val dao: AclDao) : AclRepository {
 
-    override suspend fun allow(kind: AclKind, subject: String, reason: String) {
-        dao.upsert(AclEntity(kind, subject, AclState.ALLOWED, AclPriority.LOW, reason, System.currentTimeMillis()))
+    override suspend fun allow(kind: AclKind, subject: String, reason: String, safetyScore: Float?, sessionOnly: Boolean) {
+        dao.upsert(AclEntity(kind, subject, AclState.ALLOWED, AclPriority.LOW, reason, System.currentTimeMillis(), safetyScore, sessionOnly))
     }
 
-    override suspend fun block(kind: AclKind, subject: String, reason: String) {
-        dao.upsert(AclEntity(kind, subject, AclState.BLOCKED, AclPriority.LOW, reason, System.currentTimeMillis()))
+    override suspend fun block(kind: AclKind, subject: String, reason: String, safetyScore: Float?, sessionOnly: Boolean) {
+        dao.upsert(AclEntity(kind, subject, AclState.BLOCKED, AclPriority.LOW, reason, System.currentTimeMillis(), safetyScore, sessionOnly))
     }
 
     override suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String) {
@@ -67,7 +72,11 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
         }
     }
 
-    private fun AclEntity.toEntry() = AclEntry(kind, subject, state, priority, reason, updatedAtEpochMillis)
+    override suspend fun clearSessionVerdicts(kind: AclKind) {
+        dao.deleteSessionOnly(kind)
+    }
+
+    private fun AclEntity.toEntry() = AclEntry(kind, subject, state, priority, reason, updatedAtEpochMillis, safetyScore, sessionOnly)
 }
 
 object AclModule {

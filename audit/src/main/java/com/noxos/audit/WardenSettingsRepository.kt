@@ -21,7 +21,8 @@ class WardenSettingsRepository(private val context: Context) {
         val FLAGGED_ALERTS_ENABLED = booleanPreferencesKey("flagged_alerts_enabled")
         val SCAN_COMPLETION_ALERTS_ENABLED = booleanPreferencesKey("scan_completion_alerts_enabled")
         val RETENTION_DAYS = intPreferencesKey("retention_days")
-        val AI_ANALYSIS_ENABLED = booleanPreferencesKey("ai_analysis_enabled")
+        val AI_NETWORK_ANALYSIS_ENABLED = booleanPreferencesKey("ai_analysis_enabled")
+        val AI_FILE_ANALYSIS_ENABLED = booleanPreferencesKey("ai_file_analysis_enabled")
         val INFERENCE_ENDPOINT_URL = stringPreferencesKey("inference_endpoint_url")
         val INFERENCE_API_KEY = stringPreferencesKey("inference_api_key")
     }
@@ -58,10 +59,16 @@ class WardenSettingsRepository(private val context: Context) {
         context.wardenDataStore.edit { it[Keys.RETENTION_DAYS] = days }
     }
 
-    val aiAnalysisEnabled: Flow<Boolean> = context.wardenDataStore.data.map { it[Keys.AI_ANALYSIS_ENABLED] ?: true }
+    val aiNetworkAnalysisEnabled: Flow<Boolean> = context.wardenDataStore.data.map { it[Keys.AI_NETWORK_ANALYSIS_ENABLED] ?: true }
 
-    suspend fun setAiAnalysisEnabled(enabled: Boolean) {
-        context.wardenDataStore.edit { it[Keys.AI_ANALYSIS_ENABLED] = enabled }
+    suspend fun setAiNetworkAnalysisEnabled(enabled: Boolean) {
+        context.wardenDataStore.edit { it[Keys.AI_NETWORK_ANALYSIS_ENABLED] = enabled }
+    }
+
+    val aiFileAnalysisEnabled: Flow<Boolean> = context.wardenDataStore.data.map { it[Keys.AI_FILE_ANALYSIS_ENABLED] ?: true }
+
+    suspend fun setAiFileAnalysisEnabled(enabled: Boolean) {
+        context.wardenDataStore.edit { it[Keys.AI_FILE_ANALYSIS_ENABLED] = enabled }
     }
 
     val inferenceEndpointUrl: Flow<String> = context.wardenDataStore.data.map { it[Keys.INFERENCE_ENDPOINT_URL] ?: "" }

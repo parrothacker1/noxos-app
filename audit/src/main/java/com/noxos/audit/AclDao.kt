@@ -25,4 +25,7 @@ interface AclDao {
 
     @Query("SELECT * FROM acl_entries WHERE kind = :kind AND state = :state")
     suspend fun entriesByKindAndState(kind: AclKind, state: AclState): List<AclEntity>
+
+    @Query("DELETE FROM acl_entries WHERE kind = :kind AND sessionOnly = 1")
+    suspend fun deleteSessionOnly(kind: AclKind)
 }

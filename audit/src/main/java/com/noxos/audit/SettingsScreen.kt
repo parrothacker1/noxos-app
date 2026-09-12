@@ -36,8 +36,10 @@ fun SettingsScreen(
     onFlaggedAlertsChange: (Boolean) -> Unit,
     scanCompletionAlertsEnabled: Boolean,
     onScanCompletionAlertsChange: (Boolean) -> Unit,
-    aiAnalysisEnabled: Boolean,
-    onAiAnalysisChange: (Boolean) -> Unit,
+    aiNetworkAnalysisEnabled: Boolean,
+    onAiNetworkAnalysisChange: (Boolean) -> Unit,
+    aiFileAnalysisEnabled: Boolean,
+    onAiFileAnalysisChange: (Boolean) -> Unit,
     inferenceEndpointUrl: String,
     onInferenceEndpointUrlChange: (String) -> Unit,
     inferenceApiKey: String,
@@ -100,7 +102,8 @@ fun SettingsScreen(
             }
 
             SettingsSection("Threat analysis") {
-                SettingsSwitchRow("AI analysis of flagged traffic", aiAnalysisEnabled, onCheckedChange = onAiAnalysisChange)
+                SettingsSwitchRow("AI analysis of network traffic", aiNetworkAnalysisEnabled, onCheckedChange = onAiNetworkAnalysisChange)
+                SettingsSwitchRow("AI analysis of files", aiFileAnalysisEnabled, onCheckedChange = onAiFileAnalysisChange)
                 SettingsTextEditRow(
                     label = "Inference endpoint",
                     value = inferenceEndpointUrl,
