@@ -4,11 +4,12 @@ import com.noxos.audit.AclEntry
 import com.noxos.audit.AclKind
 import com.noxos.audit.AclPriority
 import com.noxos.audit.AclState
-import com.sun.net.httpserver.HttpServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
-import java.net.InetSocketAddress
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.ServerSocket
 
 class AnalysisDispatcherTest {
 
@@ -21,52 +22,75 @@ class AnalysisDispatcherTest {
         updatedAtEpochMillis = 1_700_000_000_000L
     )
 
-    private fun fakeServer(status: Int, body: String, headerCheck: ((String?) -> Unit)? = null): HttpServer {
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/analyze/network") { exchange ->
-            headerCheck?.invoke(exchange.requestHeaders.getFirst("Authorization"))
-            val bytes = body.toByteArray(Charsets.UTF_8)
-            exchange.sendResponseHeaders(status, bytes.size.toLong())
-            exchange.responseBody.use { it.write(bytes) }
+    private class FakeServer(status: Int, body: String) {
+        private val socket = ServerSocket(0)
+
+        @Volatile
+        var receivedAuthHeader: String? = null
+            private set
+
+        private val thread = Thread {
+            try {
+                val client = socket.accept()
+                val reader = BufferedReader(InputStreamReader(client.getInputStream()))
+                var line: String?
+                while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
+                    if (line!!.startsWith("Authorization:", ignoreCase = true)) {
+                        receivedAuthHeader = line!!.substringAfter(":").trim()
+                    }
+                }
+                val bytes = body.toByteArray(Charsets.UTF_8)
+                val out = client.getOutputStream()
+                out.write("HTTP/1.1 $status OK\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray(Charsets.UTF_8))
+                out.write(bytes)
+                out.flush()
+                client.close()
+            } catch (_: Exception) {
+            }
         }
-        server.start()
-        return server
+
+        fun start(): FakeServer {
+            thread.start()
+            return this
+        }
+
+        val port: Int get() = socket.localPort
+
+        fun stop() {
+            socket.close()
+        }
     }
 
     @Test
     fun `parses an allow verdict from a real HTTP response`() {
-        val server = fakeServer(200, """{"verdict":"allow","confidence":0.9}""")
+        val server = FakeServer(200, """{"verdict":"allow","confidence":0.9}""").start()
         try {
-            val endpoint = "http://127.0.0.1:${server.address.port}"
-            val verdict = AnalysisDispatcher.requestVerdict(endpoint, "", entry())
+            val verdict = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", entry())
             assertEquals("allow", verdict)
         } finally {
-            server.stop(0)
+            server.stop()
         }
     }
 
     @Test
     fun `sends the api key as a bearer token when configured`() {
-        var receivedAuth: String? = null
-        val server = fakeServer(200, """{"verdict":"block"}""") { receivedAuth = it }
+        val server = FakeServer(200, """{"verdict":"block"}""").start()
         try {
-            val endpoint = "http://127.0.0.1:${server.address.port}"
-            val verdict = AnalysisDispatcher.requestVerdict(endpoint, "secret-token", entry())
+            val verdict = AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "secret-token", entry())
             assertEquals("block", verdict)
-            assertEquals("Bearer secret-token", receivedAuth)
+            assertEquals("Bearer secret-token", server.receivedAuthHeader)
         } finally {
-            server.stop(0)
+            server.stop()
         }
     }
 
     @Test
     fun `returns null on a non-200 response instead of throwing`() {
-        val server = fakeServer(500, """{"error":"boom"}""")
+        val server = FakeServer(500, """{"error":"boom"}""").start()
         try {
-            val endpoint = "http://127.0.0.1:${server.address.port}"
-            assertNull(AnalysisDispatcher.requestVerdict(endpoint, "", entry()))
+            assertNull(AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", entry()))
         } finally {
-            server.stop(0)
+            server.stop()
         }
     }
 
