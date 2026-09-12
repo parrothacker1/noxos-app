@@ -216,7 +216,7 @@ class NetMonitorService : VpnService() {
             val protocol = buf[9].toInt() and 0xFF
             val dstIpStr = PacketUtils.formatIp(buf, 16)
 
-            val verdict = AclChecker.verdict(dstIpStr, aclCache)
+            val verdict = aclCache[dstIpStr]
             if (verdict == AclState.BLOCKED) {
                 if (descriptor != null) {
                     logFlow(descriptor, repo, AuditOutcome.BLOCKED, flagged = false, resultSummary = "blocked host", remoteHost = dstIpStr)
