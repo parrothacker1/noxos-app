@@ -320,9 +320,14 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val result = triggerRouter.scanFile(uri, filename)
             var quarantined = false
-            if (result is ScanResult.Failure) {
+            if (result !is ScanResult.Success) {
+                val reason = when (result) {
+                    is ScanResult.Failure -> result.reason
+                    is ScanResult.Error -> result.message
+                    is ScanResult.Success -> ""
+                }
                 val mimeType = contentResolver.getType(uri)
-                quarantined = quarantineManager.quarantine(uri, filename, mimeType, result.reason)
+                quarantined = quarantineManager.quarantine(uri, filename, mimeType, reason)
             }
             if (settingsRepository.scanCompletionAlertsEnabled.first()) {
                 postScanCompletionNotification(filename, result, quarantined)
@@ -338,7 +343,7 @@ class MainActivity : ComponentActivity() {
         val text = when (result) {
             is ScanResult.Success -> "Scan complete — sanitized"
             is ScanResult.Failure -> if (quarantined) "Quarantined: ${result.reason}" else "Scan flagged: ${result.reason}"
-            is ScanResult.Error -> "Scan error: ${result.message}"
+            is ScanResult.Error -> if (quarantined) "Quarantined: ${result.message}" else "Scan error: ${result.message}"
         }
         val notification = Notification.Builder(this, channelId)
             .setContentTitle(filename)
