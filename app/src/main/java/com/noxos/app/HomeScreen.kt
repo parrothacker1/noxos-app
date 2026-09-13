@@ -39,10 +39,11 @@ fun HomeScreen(
     isScanning: Boolean,
     scanProgress: ScanProgress,
     onCancelScan: () -> Unit,
-    netMonitorActive: Boolean,
+    monitoringActive: Boolean,
     connectionsInspected: Int,
+    modelLoadError: String?,
     onScanFile: (Uri) -> Unit,
-    onToggleNetMonitor: () -> Unit,
+    onToggleMonitoring: () -> Unit,
     onViewAudit: () -> Unit,
     onOpenSettings: () -> Unit,
     auditEventCount: Int,
@@ -82,11 +83,12 @@ fun HomeScreen(
                 ScanningContent(scanProgress, onCancelScan)
             } else {
                 IdleContent(
-                    netMonitorActive = netMonitorActive,
+                    monitoringActive = monitoringActive,
                     connectionsInspected = connectionsInspected,
+                    modelLoadError = modelLoadError,
                     auditEventCount = auditEventCount,
                     onScanFile = { filePickerLauncher.launch(arrayOf("*/*")) },
-                    onToggleNetMonitor = onToggleNetMonitor,
+                    onToggleMonitoring = onToggleMonitoring,
                     onViewAudit = onViewAudit
                 )
             }
@@ -96,11 +98,12 @@ fun HomeScreen(
 
 @Composable
 private fun IdleContent(
-    netMonitorActive: Boolean,
+    monitoringActive: Boolean,
     connectionsInspected: Int,
+    modelLoadError: String?,
     auditEventCount: Int,
     onScanFile: () -> Unit,
-    onToggleNetMonitor: () -> Unit,
+    onToggleMonitoring: () -> Unit,
     onViewAudit: () -> Unit
 ) {
     Column {
@@ -128,34 +131,41 @@ private fun IdleContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        ContainmentMark(active = netMonitorActive)
+        ContainmentMark(active = monitoringActive)
         Text(
-            if (netMonitorActive) "MONITORING — $connectionsInspected CONNECTIONS INSPECTED" else "IDLE — NO ACTIVE SESSION",
+            if (monitoringActive) "MONITORING — $connectionsInspected CONNECTIONS INSPECTED" else "IDLE — NO ACTIVE SESSION",
             style = MaterialTheme.typography.labelMedium,
-            color = if (netMonitorActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            color = if (monitoringActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(
             onClick = onScanFile,
-            enabled = !netMonitorActive,
+            enabled = !monitoringActive,
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Outlined.UploadFile, contentDescription = null)
             Spacer(modifier = Modifier.width(10.dp))
             Text("Select & Scan File")
         }
-        if (netMonitorActive) {
-            Button(onClick = onToggleNetMonitor, modifier = Modifier.fillMaxWidth()) {
-                Text("Stop Network Monitor")
+        if (monitoringActive) {
+            Button(onClick = onToggleMonitoring, modifier = Modifier.fillMaxWidth()) {
+                Text("Stop Monitoring")
             }
         } else {
-            OutlinedButton(onClick = onToggleNetMonitor, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = onToggleMonitoring, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Outlined.Wifi, contentDescription = null)
                 Spacer(modifier = Modifier.width(10.dp))
-                Text("Start Network Monitor")
+                Text("Start Monitoring")
             }
+        }
+        if (modelLoadError != null) {
+            Text(
+                modelLoadError,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error
+            )
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),

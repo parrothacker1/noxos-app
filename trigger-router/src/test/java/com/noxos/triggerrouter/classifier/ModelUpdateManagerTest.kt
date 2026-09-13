@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,10 +70,8 @@ class ModelUpdateManagerTest {
     }
 
     @Test
-    fun `a checksum mismatch is rejected and the current model is left untouched`() = runBlocking {
+    fun `a checksum mismatch is rejected and no model becomes current`() = runBlocking {
         val context: Context = ApplicationProvider.getApplicationContext()
-        val bundled = ModelUpdateManager(context).loadCurrentModelJson()
-
         val corruptModelBytes = """{"tampered":true}""".toByteArray()
         val modelServer = FakeHttpServer(corruptModelBytes).start()
         val manifestJson = """{"version":1,"sha256":"${"0".repeat(64)}","modelUrl":"http://127.0.0.1:${modelServer.port}/model"}"""
@@ -82,20 +82,67 @@ class ModelUpdateManagerTest {
         val result = manager.checkForUpdateIfStale()
 
         assertTrue(result is ModelUpdateResult.Failed)
-        assertEquals(bundled, manager.loadCurrentModelJson())
+        assertFalse(manager.hasLocalModel())
+        assertNull(manager.loadCurrentModelJson())
 
         manifestServer.stop()
         modelServer.stop()
     }
 
     @Test
-    fun `with no download yet, the bundled placeholder asset is used`() {
+    fun `with no download ever attempted, there is no local model`() {
         val context: Context = ApplicationProvider.getApplicationContext()
         val manager = ModelUpdateManager(context)
 
-        val json = manager.loadCurrentModelJson()
+        assertFalse(manager.hasLocalModel())
+        assertNull(manager.loadCurrentModelJson())
+    }
 
-        assertTrue(json.contains("dst_port"))
+    @Test
+    fun `ensureModelLoaded fetches immediately when no local model exists yet, ignoring the staleness window`() = runBlocking {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val newModelBytes = """{"base_score":0.0,"trees":[]}""".toByteArray()
+        val modelServer = FakeHttpServer(newModelBytes).start()
+        val manifestJson = """{"version":1,"sha256":"${sha256Hex(newModelBytes)}","modelUrl":"http://127.0.0.1:${modelServer.port}/model"}"""
+        val manifestServer = FakeHttpServer(manifestJson.toByteArray()).start()
+        val manager = ModelUpdateManager(context, manifestUrl = "http://127.0.0.1:${manifestServer.port}/manifest")
+
+        val loaded = manager.ensureModelLoaded()
+
+        assertTrue(loaded)
+        assertTrue(manager.hasLocalModel())
+        assertEquals(String(newModelBytes), manager.loadCurrentModelJson())
+
+        manifestServer.stop()
+        modelServer.stop()
+    }
+
+    @Test
+    fun `ensureModelLoaded returns false and stays false when the manifest is unreachable`() = runBlocking {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val manager = ModelUpdateManager(context, manifestUrl = "http://127.0.0.1:1/manifest")
+
+        val loaded = manager.ensureModelLoaded()
+
+        assertFalse(loaded)
+        assertFalse(manager.hasLocalModel())
+    }
+
+    @Test
+    fun `ensureModelLoaded is a cheap no-op once a model is already local`() = runBlocking {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val newModelBytes = """{"base_score":0.0,"trees":[]}""".toByteArray()
+        val modelServer = FakeHttpServer(newModelBytes).start()
+        val manifestJson = """{"version":1,"sha256":"${sha256Hex(newModelBytes)}","modelUrl":"http://127.0.0.1:${modelServer.port}/model"}"""
+        val manifestServer = FakeHttpServer(manifestJson.toByteArray()).start()
+        val manager = ModelUpdateManager(context, manifestUrl = "http://127.0.0.1:${manifestServer.port}/manifest")
+        manager.ensureModelLoaded()
+        manifestServer.stop()
+        modelServer.stop()
+
+        val secondCall = manager.ensureModelLoaded()
+
+        assertTrue(secondCall)
     }
 
     @Test

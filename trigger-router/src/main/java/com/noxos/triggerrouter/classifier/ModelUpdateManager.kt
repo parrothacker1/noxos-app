@@ -23,12 +23,13 @@ class ModelUpdateManager(
     private val modelFile: File get() = File(context.filesDir, MODEL_FILE_NAME)
     private val metaFile: File get() = File(context.filesDir, META_FILE_NAME)
 
-    fun loadCurrentModelJson(): String {
-        return if (modelFile.exists()) {
-            modelFile.readText()
-        } else {
-            context.assets.open(BUNDLED_ASSET_NAME).bufferedReader().use { it.readText() }
-        }
+    fun hasLocalModel(): Boolean = modelFile.exists()
+
+    fun loadCurrentModelJson(): String? = if (modelFile.exists()) modelFile.readText() else null
+
+    suspend fun ensureModelLoaded(): Boolean = withContext(Dispatchers.IO) {
+        if (modelFile.exists()) return@withContext true
+        checkForUpdate(readMeta(), System.currentTimeMillis()) is ModelUpdateResult.Updated
     }
 
     suspend fun checkForUpdateIfStale(): ModelUpdateResult = withContext(Dispatchers.IO) {
@@ -105,7 +106,6 @@ class ModelUpdateManager(
     companion object {
         private const val MODEL_FILE_NAME = "on_device_network_model.json"
         private const val META_FILE_NAME = "on_device_network_model.meta"
-        private const val BUNDLED_ASSET_NAME = "on_device_network_model.json"
         private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
         private const val TIMEOUT_MS = 10_000
 

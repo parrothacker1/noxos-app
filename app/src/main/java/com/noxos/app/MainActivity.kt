@@ -66,14 +66,15 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { }
 
-    private var netMonitorActive by mutableStateOf(false)
+    private var monitoringActive by mutableStateOf(false)
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             netMonitor.start(this)
-            netMonitorActive = true
+            fileArrivalWatcher.start()
+            monitoringActive = true
         }
     }
 
@@ -101,8 +102,6 @@ class MainActivity : ComponentActivity() {
                 Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
             )
         }
-        fileArrivalWatcher.start()
-
         lifecycleScope.launch {
             val retentionDays = settingsRepository.auditRetentionDays.first()
             auditRepository.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), retentionDays))
@@ -128,6 +127,7 @@ class MainActivity : ComponentActivity() {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
             var scanJob by remember { mutableStateOf<Job?>(null) }
             var pendingExportJson by remember { mutableStateOf("") }
+            var modelLoadError by remember { mutableStateOf<String?>(null) }
             val coroutineScope = rememberCoroutineScope()
 
             val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.DARK)
@@ -175,20 +175,31 @@ class MainActivity : ComponentActivity() {
                                 scanJob?.cancel()
                                 scanJob = null
                             },
-                            netMonitorActive = netMonitorActive,
+                            monitoringActive = monitoringActive,
                             connectionsInspected = connectionsInspected,
+                            modelLoadError = modelLoadError,
                             onScanFile = ::scanFile,
-                            onToggleNetMonitor = {
-                                if (netMonitorActive) {
+                            onToggleMonitoring = {
+                                if (monitoringActive) {
                                     netMonitor.stop(this@MainActivity)
-                                    netMonitorActive = false
+                                    fileArrivalWatcher.stop()
+                                    monitoringActive = false
                                 } else {
-                                    val permIntent = netMonitor.prepareIntent(this@MainActivity)
-                                    if (permIntent != null) {
-                                        vpnPermissionLauncher.launch(permIntent)
-                                    } else {
-                                        netMonitor.start(this@MainActivity)
-                                        netMonitorActive = true
+                                    modelLoadError = null
+                                    coroutineScope.launch {
+                                        val modelReady = modelUpdateManager.ensureModelLoaded()
+                                        if (!modelReady) {
+                                            modelLoadError = "Couldn't load the threat model — check your connection and try again"
+                                            return@launch
+                                        }
+                                        val permIntent = netMonitor.prepareIntent(this@MainActivity)
+                                        if (permIntent != null) {
+                                            vpnPermissionLauncher.launch(permIntent)
+                                        } else {
+                                            netMonitor.start(this@MainActivity)
+                                            fileArrivalWatcher.start()
+                                            monitoringActive = true
+                                        }
                                     }
                                 }
                             },
