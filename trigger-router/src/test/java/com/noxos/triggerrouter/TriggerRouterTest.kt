@@ -99,6 +99,35 @@ class TriggerRouterTest {
         assertEquals("Corrupt EXIF header", audit.errorMessage)
         assertTrue(sessionFactory.lastSession?.isClosed == true)
     }
+
+    @Test
+    fun testScanFileCheapFilterFlaggedIsTreatedAsFailureEvenThoughExifParsedFine() = runBlocking {
+        val fileContent = "dummy_file_bytes"
+        shadowOf(context.contentResolver).registerInputStream(
+            testUri,
+            ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
+        )
+
+        val jsonResponse = JSONObject()
+            .put("make", "Google")
+            .put("cheap_filter_flagged", true)
+            .put("cheap_filter_reason", "declared JPEG but magic header doesn't match")
+            .toString()
+        val jsonBytes = jsonResponse.toByteArray(Charsets.UTF_8)
+        val responseBytes = ByteArray(1 + jsonBytes.size)
+        responseBytes[0] = 0.toByte()
+        System.arraycopy(jsonBytes, 0, responseBytes, 1, jsonBytes.size)
+        transport.bytesToReceive = responseBytes
+
+        val result = router.scanFile(testUri, "file.jpg")
+
+        assertTrue(result is ScanResult.Failure)
+        val failure = result as ScanResult.Failure
+        assertEquals("declared JPEG but magic header doesn't match", failure.reason)
+
+        val audit = auditRepository.recordedEvents.single()
+        assertEquals(AuditOutcome.FAILURE, audit.outcome)
+    }
 }
 
 class FakeAuditRepository : AuditRepository {

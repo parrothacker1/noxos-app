@@ -5,10 +5,17 @@ import java.nio.ByteBuffer
 object VmPayloadProtocol {
     const val VSOCK_PORT = 5000L
 
-    fun encodeRequest(fileBytes: ByteArray): ByteArray {
-        val buffer = ByteBuffer.allocate(4 + fileBytes.size)
-        buffer.putInt(fileBytes.size)
-        buffer.put(fileBytes)
+    /** Parse the request payload as an image file and return its EXIF metadata (or a parse error). */
+    const val TASK_FILE_SCAN: Byte = 0
+
+    /** Run a header-sanity/protocol-conformance check on a raw packet sample and return a flagged verdict. */
+    const val TASK_NETWORK_SAMPLE: Byte = 1
+
+    fun encodeRequest(taskType: Byte, payload: ByteArray): ByteArray {
+        val buffer = ByteBuffer.allocate(1 + 4 + payload.size)
+        buffer.put(taskType)
+        buffer.putInt(payload.size)
+        buffer.put(payload)
         return buffer.array()
     }
 

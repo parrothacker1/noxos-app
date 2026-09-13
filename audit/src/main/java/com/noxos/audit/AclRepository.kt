@@ -12,19 +12,28 @@ data class AclEntry(
     val reason: String,
     val updatedAtEpochMillis: Long,
     val safetyScore: Float? = null,
-    val sessionOnly: Boolean = false
+    val sessionOnly: Boolean = false,
+    val cheapFilterChecked: Boolean = false,
+    val destPort: Int? = null,
+    val protocol: String? = null
 )
 
 interface AclRepository {
     suspend fun allow(kind: AclKind, subject: String, reason: String, safetyScore: Float? = null, sessionOnly: Boolean = false)
     suspend fun block(kind: AclKind, subject: String, reason: String, safetyScore: Float? = null, sessionOnly: Boolean = false)
-    suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String)
+    suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String, destPort: Int? = null, protocol: String? = null)
     suspend fun remove(kind: AclKind, subject: String)
     fun observeAll(): Flow<List<AclEntry>>
     fun observeKind(kind: AclKind): Flow<List<AclEntry>>
 
-    /** Up to [limit] flagged network entries, highest priority and oldest first. */
+    /** Up to [limit] flagged network entries that already cleared the pVM cheap filter, highest priority and oldest first. */
     suspend fun nextAnalysisBatch(limit: Int): List<AclEntry>
+
+    /** Up to [limit] flagged network entries still awaiting the pVM cheap filter, oldest first. */
+    suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry>
+
+    /** Records that the pVM cheap filter itself flagged this destination - stays FLAGGED, but is now eligible for [nextAnalysisBatch]. */
+    suspend fun markCheapFilterFlagged(kind: AclKind, subject: String, reason: String)
 
     /** Seeds well-known-safe network hosts. Never overwrites an existing entry (user or AI set). */
     suspend fun seedDefaults()
@@ -43,8 +52,10 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
         dao.upsert(AclEntity(kind, subject, AclState.BLOCKED, AclPriority.LOW, reason, System.currentTimeMillis(), safetyScore, sessionOnly))
     }
 
-    override suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String) {
-        dao.insertIfAbsent(AclEntity(kind, subject, AclState.FLAGGED, priority, reason, System.currentTimeMillis()))
+    override suspend fun flagIfUnknown(kind: AclKind, subject: String, priority: AclPriority, reason: String, destPort: Int?, protocol: String?) {
+        dao.insertIfAbsent(
+            AclEntity(kind, subject, AclState.FLAGGED, priority, reason, System.currentTimeMillis(), destPort = destPort, protocol = protocol)
+        )
     }
 
     override suspend fun remove(kind: AclKind, subject: String) {
@@ -59,9 +70,22 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
 
     override suspend fun nextAnalysisBatch(limit: Int): List<AclEntry> {
         return dao.entriesByKindAndState(AclKind.NETWORK, AclState.FLAGGED)
+            .filter { it.cheapFilterChecked }
             .sortedWith(compareByDescending<AclEntity> { it.priority == AclPriority.HIGH }.thenBy { it.updatedAtEpochMillis })
             .take(limit)
             .map { it.toEntry() }
+    }
+
+    override suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry> {
+        return dao.entriesByKindAndState(AclKind.NETWORK, AclState.FLAGGED)
+            .filter { !it.cheapFilterChecked }
+            .sortedBy { it.updatedAtEpochMillis }
+            .take(limit)
+            .map { it.toEntry() }
+    }
+
+    override suspend fun markCheapFilterFlagged(kind: AclKind, subject: String, reason: String) {
+        dao.markCheapFilterChecked(kind, subject, reason, System.currentTimeMillis())
     }
 
     override suspend fun seedDefaults() {
@@ -76,7 +100,10 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
         dao.deleteSessionOnly(kind)
     }
 
-    private fun AclEntity.toEntry() = AclEntry(kind, subject, state, priority, reason, updatedAtEpochMillis, safetyScore, sessionOnly)
+    private fun AclEntity.toEntry() = AclEntry(
+        kind, subject, state, priority, reason, updatedAtEpochMillis,
+        safetyScore, sessionOnly, cheapFilterChecked, destPort, protocol
+    )
 }
 
 object AclModule {

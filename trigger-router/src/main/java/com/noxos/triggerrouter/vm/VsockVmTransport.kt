@@ -1,5 +1,3 @@
-// UNVERIFIED: This class is written against documented-but-unconfirmed AVF Java APIs
-// and cannot be verified until Phase 2 on real hardware/Cuttlefish.
 package com.noxos.triggerrouter.vm
 
 import android.os.ParcelFileDescriptor

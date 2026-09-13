@@ -27,6 +27,7 @@ android {
 
 dependencies {
     implementation(project(":audit"))
+    implementation(project(":trigger-router"))
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)

@@ -61,6 +61,9 @@ class RoomAclRepositoryTest {
         repository.flagIfUnknown(AclKind.NETWORK, "high1", AclPriority.HIGH, "pending")
         repository.flagIfUnknown(AclKind.NETWORK, "low2", AclPriority.LOW, "pending")
         repository.flagIfUnknown(AclKind.NETWORK, "high2", AclPriority.HIGH, "pending")
+        listOf("low1", "high1", "low2", "high2").forEach {
+            repository.markCheapFilterFlagged(AclKind.NETWORK, it, "cheap filter: clear to analyze")
+        }
 
         val batch = repository.nextAnalysisBatch(limit = 3)
 
@@ -121,5 +124,50 @@ class RoomAclRepositoryTest {
         val entry = repository.observeKind(AclKind.NETWORK).first().single()
         assertEquals(0.1f, entry.safetyScore)
         assertTrue(entry.sessionOnly)
+    }
+
+    @Test
+    fun testFlagIfUnknownPersistsDestPortAndProtocol() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "1.2.3.4", AclPriority.HIGH, "pending", destPort = 4444, protocol = "TCP")
+
+        val entry = repository.observeKind(AclKind.NETWORK).first().single()
+        assertEquals(4444, entry.destPort)
+        assertEquals("TCP", entry.protocol)
+    }
+
+    @Test
+    fun testNextAnalysisBatchOnlySkipsEntriesNotYetCheapFilterChecked() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "not-checked", AclPriority.HIGH, "pending")
+        repository.flagIfUnknown(AclKind.NETWORK, "checked", AclPriority.HIGH, "pending")
+        repository.markCheapFilterFlagged(AclKind.NETWORK, "checked", "cheap filter: suspicious header")
+
+        val batch = repository.nextAnalysisBatch(limit = 10)
+
+        assertEquals(1, batch.size)
+        assertEquals("checked", batch.single().subject)
+    }
+
+    @Test
+    fun testNextCheapFilterBatchOnlyReturnsUncheckedEntries() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "not-checked", AclPriority.HIGH, "pending")
+        repository.flagIfUnknown(AclKind.NETWORK, "checked", AclPriority.HIGH, "pending")
+        repository.markCheapFilterFlagged(AclKind.NETWORK, "checked", "cheap filter: suspicious header")
+
+        val batch = repository.nextCheapFilterBatch(limit = 10)
+
+        assertEquals(1, batch.size)
+        assertEquals("not-checked", batch.single().subject)
+    }
+
+    @Test
+    fun testMarkCheapFilterFlaggedUpdatesReasonAndStaysFlagged() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "1.2.3.4", AclPriority.HIGH, "pending")
+
+        repository.markCheapFilterFlagged(AclKind.NETWORK, "1.2.3.4", "cheap filter: suspicious header")
+
+        val entry = repository.observeKind(AclKind.NETWORK).first().single()
+        assertEquals(AclState.FLAGGED, entry.state)
+        assertTrue(entry.cheapFilterChecked)
+        assertEquals("cheap filter: suspicious header", entry.reason)
     }
 }

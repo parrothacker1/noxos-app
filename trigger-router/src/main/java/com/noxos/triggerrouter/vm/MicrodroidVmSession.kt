@@ -1,5 +1,3 @@
-// UNVERIFIED: This class is written against documented-but-unconfirmed AVF Java APIs
-// and cannot be verified until Phase 2 on real hardware/Cuttlefish.
 package com.noxos.triggerrouter.vm
 
 import android.content.Context
@@ -33,7 +31,7 @@ class MicrodroidVmSession(
     }
 }
 
-class RealVmSessionFactory : VmSessionFactory {
+class MicrodroidVmSessionFactory : VmSessionFactory {
     override fun createSession(context: Context): VmSession {
         val vmm = context.getSystemService(VirtualMachineManager::class.java)
             ?: throw IllegalStateException("VirtualMachineManager not supported on this device")

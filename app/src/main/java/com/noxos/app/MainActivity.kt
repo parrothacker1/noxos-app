@@ -30,7 +30,7 @@ import com.noxos.triggerrouter.FileArrivalWatcher
 import com.noxos.triggerrouter.QuarantineManager
 import com.noxos.triggerrouter.ScanResult
 import com.noxos.triggerrouter.TriggerRouter
-import com.noxos.triggerrouter.vm.RealVmSessionFactory
+import com.noxos.triggerrouter.vm.MicrodroidVmSessionFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
         aclRepository = AclModule.create(applicationContext)
         quarantineRepository = QuarantineModule.create(applicationContext)
         settingsRepository = WardenSettingsRepository(applicationContext)
-        triggerRouter = TriggerRouter(applicationContext, auditRepository, RealVmSessionFactory(), settingsRepository)
+        triggerRouter = TriggerRouter(applicationContext, auditRepository, MicrodroidVmSessionFactory(), settingsRepository)
         netMonitor = NetMonitor(auditRepository, aclRepository, settingsRepository)
         fileArrivalWatcher = FileArrivalWatcher(applicationContext, aclRepository) { uri -> handleAutoScan(uri) }
         quarantineManager = QuarantineManager(applicationContext, quarantineRepository)

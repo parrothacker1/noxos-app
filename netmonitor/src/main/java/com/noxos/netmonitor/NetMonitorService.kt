@@ -16,6 +16,7 @@ import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
 import com.noxos.audit.WardenSettingsRepository
+import com.noxos.triggerrouter.vm.MicrodroidVmSessionFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +43,7 @@ class NetMonitorService : VpnService() {
     private var aclJob: Job? = null
     private var aiAnalysisSettingJob: Job? = null
     private var analysisDispatchJob: Job? = null
+    private var networkSampleDispatchJob: Job? = null
 
     private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
     private val lastLoggedAt = ConcurrentHashMap<String, Long>()
@@ -63,6 +65,15 @@ class NetMonitorService : VpnService() {
         var settingsRepository: WardenSettingsRepository? = null
 
         val connectionsInspected = MutableStateFlow(0)
+
+        /**
+         * A single-packet sample captured the instant a destination is newly flagged, keyed by
+         * destination IP - consumed (and removed) by [NetworkSampleVmDispatcher] when it submits
+         * that destination to the pVM cheap filter. In-memory only: a destination that survives
+         * an app restart without ever being consumed loses its sample and won't get cheap-filter
+         * checked until it's flagged again in a fresh process. Known, deliberate limitation.
+         */
+        val pendingPacketSamples = ConcurrentHashMap<String, ByteArray>()
 
         const val ACTION_START = "com.noxos.netmonitor.START"
         const val ACTION_STOP  = "com.noxos.netmonitor.STOP"
@@ -144,6 +155,9 @@ class NetMonitorService : VpnService() {
         analysisDispatchJob = if (acl != null && settings != null) {
             serviceScope.launch { AnalysisDispatcher(acl, settings).run() }
         } else null
+        networkSampleDispatchJob = acl?.let {
+            serviceScope.launch { NetworkSampleVmDispatcher(applicationContext, it, MicrodroidVmSessionFactory()).run() }
+        }
 
         captureJob = serviceScope.launch {
             runCaptureLoop(vpnInterface!!, repo)
@@ -155,10 +169,12 @@ class NetMonitorService : VpnService() {
         aclJob?.cancel()
         aiAnalysisSettingJob?.cancel()
         analysisDispatchJob?.cancel()
+        networkSampleDispatchJob?.cancel()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
         lastLoggedAt.clear()
         flagAttempted.clear()
+        pendingPacketSamples.clear()
         tcpRelay?.closeAll()
         tcpRelay = null
         vpnInterface?.close()
@@ -225,10 +241,17 @@ class NetMonitorService : VpnService() {
             }
 
             if (verdict == null && aiNetworkAnalysisEnabled && flagAttempted.add(dstIpStr)) {
-                val priority = NetworkPriority.classify(PacketUtils.destPort(buf, len))
+                val destPort = PacketUtils.destPort(buf, len)
+                val priority = NetworkPriority.classify(destPort)
+                val protocolName = when (protocol) {
+                    6 -> "TCP"
+                    17 -> "UDP"
+                    else -> "OTHER"
+                }
+                pendingPacketSamples[dstIpStr] = buf.copyOf(len)
                 aclRepository?.let { acl ->
                     serviceScope.launch {
-                        acl.flagIfUnknown(AclKind.NETWORK, dstIpStr, priority, "new destination, pending analysis")
+                        acl.flagIfUnknown(AclKind.NETWORK, dstIpStr, priority, "new destination, pending analysis", destPort, protocolName)
                     }
                 }
             }

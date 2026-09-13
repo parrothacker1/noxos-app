@@ -8,11 +8,20 @@ import java.nio.ByteBuffer
 class VmPayloadProtocolTest {
 
     @Test
-    fun testEncodeRequest() {
+    fun testEncodeRequestForFileScan() {
         val input = byteArrayOf(1, 2, 3, 4)
-        val encoded = VmPayloadProtocol.encodeRequest(input)
-        
-        val expected = ByteBuffer.allocate(8).putInt(4).put(input).array()
+        val encoded = VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_FILE_SCAN, input)
+
+        val expected = ByteBuffer.allocate(9).put(0.toByte()).putInt(4).put(input).array()
+        assertArrayEquals(expected, encoded)
+    }
+
+    @Test
+    fun testEncodeRequestForNetworkSampleUsesADifferentTaskTypeByte() {
+        val input = byteArrayOf(9, 9)
+        val encoded = VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_NETWORK_SAMPLE, input)
+
+        val expected = ByteBuffer.allocate(7).put(1.toByte()).putInt(2).put(input).array()
         assertArrayEquals(expected, encoded)
     }
 

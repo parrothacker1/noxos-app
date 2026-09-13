@@ -28,4 +28,7 @@ interface AclDao {
 
     @Query("DELETE FROM acl_entries WHERE kind = :kind AND sessionOnly = 1")
     suspend fun deleteSessionOnly(kind: AclKind)
+
+    @Query("UPDATE acl_entries SET cheapFilterChecked = 1, reason = :reason, updatedAtEpochMillis = :updatedAtEpochMillis WHERE kind = :kind AND subject = :subject")
+    suspend fun markCheapFilterChecked(kind: AclKind, subject: String, reason: String, updatedAtEpochMillis: Long)
 }

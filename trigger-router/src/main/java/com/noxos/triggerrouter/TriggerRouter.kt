@@ -62,7 +62,7 @@ class TriggerRouter(
                     stepStart = System.currentTimeMillis()
 
                     val transport = session.getTransport()
-                    val requestPayload = VmPayloadProtocol.encodeRequest(fileBytes)
+                    val requestPayload = VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_FILE_SCAN, fileBytes)
                     transport.send(requestPayload)
                     val responsePayload = transport.receive()
 
@@ -74,13 +74,22 @@ class TriggerRouter(
                     val result = when (decoded.status) {
                         0 -> {
                             val json = JSONObject(decoded.json)
-                            val metadata = mutableMapOf<String, String>()
-                            json.keys().forEach { key ->
-                                metadata[key] = json.optString(key, "")
+                            if (json.optBoolean("cheap_filter_flagged", false)) {
+                                val reason = json.optString("cheap_filter_reason", "flagged by in-VM pre-scan filter")
+                                outcome = AuditOutcome.FAILURE
+                                errorMessage = reason
+                                ScanResult.Failure(reason)
+                            } else {
+                                val metadata = mutableMapOf<String, String>()
+                                json.keys().forEach { key ->
+                                    if (key != "cheap_filter_flagged" && key != "cheap_filter_reason") {
+                                        metadata[key] = json.optString(key, "")
+                                    }
+                                }
+                                outcome = AuditOutcome.SUCCESS
+                                resultSummary = "Parsed EXIF successfully"
+                                ScanResult.Success(ExifData(metadata))
                             }
-                            outcome = AuditOutcome.SUCCESS
-                            resultSummary = "Parsed EXIF successfully"
-                            ScanResult.Success(ExifData(metadata))
                         }
                         1 -> {
                             outcome = AuditOutcome.FAILURE

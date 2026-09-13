@@ -11,5 +11,8 @@ data class AclEntity(
     val reason: String,
     val updatedAtEpochMillis: Long,
     val safetyScore: Float? = null,
-    val sessionOnly: Boolean = false
+    val sessionOnly: Boolean = false,
+    val cheapFilterChecked: Boolean = false,
+    val destPort: Int? = null,
+    val protocol: String? = null
 )
