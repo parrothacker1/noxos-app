@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
         settingsRepository = WardenSettingsRepository(applicationContext)
         triggerRouter = TriggerRouter(applicationContext, auditRepository, MicrodroidVmSessionFactory(), settingsRepository)
         netMonitor = NetMonitor(auditRepository, aclRepository, settingsRepository)
-        fileArrivalWatcher = FileArrivalWatcher(applicationContext, aclRepository) { uri -> handleAutoScan(uri) }
+        fileArrivalWatcher = FileArrivalWatcher(applicationContext, aclRepository) { uri, displayName -> handleAutoScan(uri, displayName) }
         quarantineManager = QuarantineManager(applicationContext, quarantineRepository)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -321,8 +321,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun handleAutoScan(uri: Uri) {
-        val filename = uri.lastPathSegment ?: "unknown_file"
+    private fun handleAutoScan(uri: Uri, filename: String) {
         lifecycleScope.launch {
             val result = triggerRouter.scanFile(uri, filename)
             var quarantined = false

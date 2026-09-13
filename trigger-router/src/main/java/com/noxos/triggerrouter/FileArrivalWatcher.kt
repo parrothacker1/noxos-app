@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
 class FileArrivalWatcher(
     private val context: Context,
     private val aclRepository: AclRepository,
-    private val onFileArrived: (Uri) -> Unit
+    private val onFileArrived: (Uri, String) -> Unit
 ) {
     private var lastSeenAddedAtEpochSeconds: Long = System.currentTimeMillis() / 1000
     private var observer: ContentObserver? = null
@@ -45,7 +45,8 @@ class FileArrivalWatcher(
         val projection = arrayOf(
             MediaStore.Downloads._ID,
             MediaStore.Downloads.DATE_ADDED,
-            MediaStore.Downloads.OWNER_PACKAGE_NAME
+            MediaStore.Downloads.OWNER_PACKAGE_NAME,
+            MediaStore.Downloads.DISPLAY_NAME
         )
         val selection = "${MediaStore.Downloads.DATE_ADDED} > ?"
         val args = arrayOf(lastSeenAddedAtEpochSeconds.toString())
@@ -60,13 +61,15 @@ class FileArrivalWatcher(
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID)
             val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Downloads.DATE_ADDED)
             val ownerCol = cursor.getColumnIndex(MediaStore.Downloads.OWNER_PACKAGE_NAME)
+            val nameCol = cursor.getColumnIndex(MediaStore.Downloads.DISPLAY_NAME)
             while (cursor.moveToNext()) {
                 lastSeenAddedAtEpochSeconds = maxOf(lastSeenAddedAtEpochSeconds, cursor.getLong(dateCol))
                 val id = cursor.getLong(idCol)
                 val owner = if (ownerCol >= 0) cursor.getString(ownerCol) else null
+                val displayName = (if (nameCol >= 0) cursor.getString(nameCol) else null) ?: "unknown_file"
                 val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
                 scope.launch {
-                    if (!isTrustedSource(owner)) onFileArrived(uri)
+                    if (!isTrustedSource(owner)) onFileArrived(uri, displayName)
                 }
             }
         }
