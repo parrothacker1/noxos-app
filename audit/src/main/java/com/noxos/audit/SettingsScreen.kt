@@ -32,6 +32,8 @@ fun SettingsScreen(
     onVmTimeoutSelected: (Int) -> Unit,
     aclEntryCount: Int,
     onViewAcl: () -> Unit,
+    quarantineEntryCount: Int,
+    onViewQuarantine: () -> Unit,
     flaggedAlertsEnabled: Boolean,
     onFlaggedAlertsChange: (Boolean) -> Unit,
     scanCompletionAlertsEnabled: Boolean,
@@ -46,6 +48,8 @@ fun SettingsScreen(
     onInferenceApiKeyChange: (String) -> Unit,
     retentionDays: Int,
     onRetentionDaysSelected: (Int) -> Unit,
+    quarantineRetentionDays: Int,
+    onQuarantineRetentionDaysSelected: (Int) -> Unit,
     onExportAuditLog: () -> Unit,
     versionLabel: String,
     onBack: () -> Unit,
@@ -80,6 +84,7 @@ fun SettingsScreen(
                 )
                 SettingsSwitchRow("Auto-destroy on completion", checked = true, enabled = false, onCheckedChange = {})
                 SettingsRow("Access control list", "$aclEntryCount", onClick = onViewAcl)
+                SettingsRow("Quarantine", "$quarantineEntryCount", onClick = onViewQuarantine)
             }
 
             SettingsSection("Appearance") {
@@ -128,6 +133,13 @@ fun SettingsScreen(
                     selected = retentionDays,
                     displayText = { "$it days" },
                     onSelect = onRetentionDaysSelected
+                )
+                SettingsDropdownRow(
+                    label = "Quarantine retention",
+                    options = retentionOptionsDays,
+                    selected = quarantineRetentionDays,
+                    displayText = { "$it days" },
+                    onSelect = onQuarantineRetentionDaysSelected
                 )
                 SettingsRow("Export audit log", "", onClick = onExportAuditLog)
             }

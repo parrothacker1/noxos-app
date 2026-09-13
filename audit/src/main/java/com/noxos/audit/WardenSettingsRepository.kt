@@ -25,6 +25,7 @@ class WardenSettingsRepository(private val context: Context) {
         val AI_FILE_ANALYSIS_ENABLED = booleanPreferencesKey("ai_file_analysis_enabled")
         val INFERENCE_ENDPOINT_URL = stringPreferencesKey("inference_endpoint_url")
         val INFERENCE_API_KEY = stringPreferencesKey("inference_api_key")
+        val QUARANTINE_RETENTION_DAYS = intPreferencesKey("quarantine_retention_days")
     }
 
     val themeMode: Flow<ThemeMode> = context.wardenDataStore.data.map { prefs ->
@@ -81,5 +82,11 @@ class WardenSettingsRepository(private val context: Context) {
 
     suspend fun setInferenceApiKey(key: String) {
         context.wardenDataStore.edit { it[Keys.INFERENCE_API_KEY] = key }
+    }
+
+    val quarantineRetentionDays: Flow<Int> = context.wardenDataStore.data.map { it[Keys.QUARANTINE_RETENTION_DAYS] ?: 30 }
+
+    suspend fun setQuarantineRetentionDays(days: Int) {
+        context.wardenDataStore.edit { it[Keys.QUARANTINE_RETENTION_DAYS] = days }
     }
 }

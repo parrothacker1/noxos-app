@@ -7,14 +7,15 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 
 @Database(
-    entities = [AuditEntryEntity::class, AclEntity::class],
-    version = 5,
+    entities = [AuditEntryEntity::class, AclEntity::class, QuarantineEntity::class],
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(AuditConverters::class)
 abstract class AuditDatabase : RoomDatabase() {
     abstract fun auditDao(): AuditDao
     abstract fun aclDao(): AclDao
+    abstract fun quarantineDao(): QuarantineDao
 
     companion object {
         @Volatile

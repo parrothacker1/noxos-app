@@ -27,6 +27,7 @@ import com.noxos.audit.*
 import com.noxos.audit.theme.WardenTheme
 import com.noxos.netmonitor.NetMonitor
 import com.noxos.triggerrouter.FileArrivalWatcher
+import com.noxos.triggerrouter.QuarantineManager
 import com.noxos.triggerrouter.ScanResult
 import com.noxos.triggerrouter.TriggerRouter
 import com.noxos.triggerrouter.vm.RealVmSessionFactory
@@ -40,6 +41,7 @@ sealed class Screen {
     object AuditList : Screen()
     data class AuditDetail(val eventId: Long) : Screen()
     object Acl : Screen()
+    object Quarantine : Screen()
     object Settings : Screen()
 }
 
@@ -47,10 +49,12 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var auditRepository: AuditRepository
     private lateinit var aclRepository: AclRepository
+    private lateinit var quarantineRepository: QuarantineRepository
     private lateinit var settingsRepository: WardenSettingsRepository
     private lateinit var triggerRouter: TriggerRouter
     private lateinit var netMonitor: NetMonitor
     private lateinit var fileArrivalWatcher: FileArrivalWatcher
+    private lateinit var quarantineManager: QuarantineManager
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -73,10 +77,12 @@ class MainActivity : ComponentActivity() {
 
         auditRepository = AuditModule.create(applicationContext)
         aclRepository = AclModule.create(applicationContext)
+        quarantineRepository = QuarantineModule.create(applicationContext)
         settingsRepository = WardenSettingsRepository(applicationContext)
         triggerRouter = TriggerRouter(applicationContext, auditRepository, RealVmSessionFactory(), settingsRepository)
         netMonitor = NetMonitor(auditRepository, aclRepository, settingsRepository)
         fileArrivalWatcher = FileArrivalWatcher(applicationContext, aclRepository) { uri -> handleAutoScan(uri) }
+        quarantineManager = QuarantineManager(applicationContext, quarantineRepository)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -94,6 +100,10 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val retentionDays = settingsRepository.auditRetentionDays.first()
             auditRepository.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), retentionDays))
+        }
+        lifecycleScope.launch {
+            val quarantineRetentionDays = settingsRepository.quarantineRetentionDays.first()
+            quarantineManager.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), quarantineRetentionDays))
         }
         lifecycleScope.launch { aclRepository.seedDefaults() }
 
@@ -117,6 +127,7 @@ class MainActivity : ComponentActivity() {
             val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.DARK)
             val events by auditRepository.observeAll().collectAsState(initial = emptyList())
             val aclEntries by aclRepository.observeAll().collectAsState(initial = emptyList())
+            val quarantineEntries by quarantineRepository.observeAll().collectAsState(initial = emptyList())
             val scanProgress by triggerRouter.progress.collectAsState()
             val connectionsInspected by netMonitor.connectionsInspected.collectAsState()
             val vmTimeout by settingsRepository.vmSessionTimeoutSeconds.collectAsState(initial = 60)
@@ -127,6 +138,7 @@ class MainActivity : ComponentActivity() {
             val inferenceEndpointUrl by settingsRepository.inferenceEndpointUrl.collectAsState(initial = "")
             val inferenceApiKey by settingsRepository.inferenceApiKey.collectAsState(initial = "")
             val retentionDays by settingsRepository.auditRetentionDays.collectAsState(initial = 90)
+            val quarantineRetentionDays by settingsRepository.quarantineRetentionDays.collectAsState(initial = 30)
 
             val exportLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.CreateDocument("application/json")
@@ -229,6 +241,13 @@ class MainActivity : ComponentActivity() {
                             onRemove = { kind, subject -> coroutineScope.launch { aclRepository.remove(kind, subject) } }
                         )
 
+                        is Screen.Quarantine -> QuarantineScreen(
+                            entries = quarantineEntries,
+                            onBack = { currentScreen = Screen.Home },
+                            onRestore = { id -> coroutineScope.launch { quarantineManager.restore(id) } },
+                            onDelete = { id -> coroutineScope.launch { quarantineManager.deletePermanently(id) } }
+                        )
+
                         is Screen.Settings -> SettingsScreen(
                             themeMode = themeMode,
                             onThemeModeChange = { mode -> coroutineScope.launch { settingsRepository.setThemeMode(mode) } },
@@ -238,6 +257,8 @@ class MainActivity : ComponentActivity() {
                             },
                             aclEntryCount = aclEntries.size,
                             onViewAcl = { currentScreen = Screen.Acl },
+                            quarantineEntryCount = quarantineEntries.size,
+                            onViewQuarantine = { currentScreen = Screen.Quarantine },
                             flaggedAlertsEnabled = flaggedAlerts,
                             onFlaggedAlertsChange = { enabled ->
                                 coroutineScope.launch { settingsRepository.setFlaggedEventAlertsEnabled(enabled) }
@@ -269,6 +290,13 @@ class MainActivity : ComponentActivity() {
                                     auditRepository.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), days))
                                 }
                             },
+                            quarantineRetentionDays = quarantineRetentionDays,
+                            onQuarantineRetentionDaysSelected = { days ->
+                                coroutineScope.launch {
+                                    settingsRepository.setQuarantineRetentionDays(days)
+                                    quarantineManager.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), days))
+                                }
+                            },
                             onExportAuditLog = {
                                 pendingExportJson = AuditExport.toJson(events)
                                 exportLauncher.launch("warden-audit-log.json")
@@ -291,20 +319,25 @@ class MainActivity : ComponentActivity() {
         val filename = uri.lastPathSegment ?: "unknown_file"
         lifecycleScope.launch {
             val result = triggerRouter.scanFile(uri, filename)
+            var quarantined = false
+            if (result is ScanResult.Failure) {
+                val mimeType = contentResolver.getType(uri)
+                quarantined = quarantineManager.quarantine(uri, filename, mimeType, result.reason)
+            }
             if (settingsRepository.scanCompletionAlertsEnabled.first()) {
-                postScanCompletionNotification(filename, result)
+                postScanCompletionNotification(filename, result, quarantined)
             }
         }
     }
 
-    private fun postScanCompletionNotification(filename: String, result: ScanResult) {
+    private fun postScanCompletionNotification(filename: String, result: ScanResult, quarantined: Boolean = false) {
         val channelId = "warden_scan_completion"
         val channel = NotificationChannel(channelId, "Warden Scan Completion", NotificationManager.IMPORTANCE_DEFAULT)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
         val text = when (result) {
             is ScanResult.Success -> "Scan complete — sanitized"
-            is ScanResult.Failure -> "Scan flagged: ${result.reason}"
+            is ScanResult.Failure -> if (quarantined) "Quarantined: ${result.reason}" else "Scan flagged: ${result.reason}"
             is ScanResult.Error -> "Scan error: ${result.message}"
         }
         val notification = Notification.Builder(this, channelId)
