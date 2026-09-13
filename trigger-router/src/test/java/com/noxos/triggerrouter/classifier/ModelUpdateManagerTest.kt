@@ -43,9 +43,8 @@ class ModelUpdateManagerTest {
                     break
                 }
                 try {
-                    client.getInputStream().bufferedReader().use { reader ->
-                        while (reader.readLine()?.isNotEmpty() == true) { }
-                    }
+                    val reader = client.getInputStream().bufferedReader()
+                    while (reader.readLine()?.isNotEmpty() == true) { }
                     val out = client.getOutputStream()
                     out.write("HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
                     out.write(body)
