@@ -3,20 +3,31 @@ package com.noxos.triggerrouter.classifier
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.File
 import java.net.ServerSocket
 import java.security.MessageDigest
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class ModelUpdateManagerTest {
+
+    @Before
+    @After
+    fun clearAnyLocalModelState() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        File(context.filesDir, "on_device_network_model.json").delete()
+        File(context.filesDir, "on_device_network_model.meta").delete()
+    }
 
     private class FakeHttpServer(body: ByteArray) {
         private val socket = ServerSocket(0)
