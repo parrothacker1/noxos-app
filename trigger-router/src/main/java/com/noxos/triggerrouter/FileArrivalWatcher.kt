@@ -68,6 +68,7 @@ class FileArrivalWatcher(
                 val owner = if (ownerCol >= 0) cursor.getString(ownerCol) else null
                 val displayName = (if (nameCol >= 0) cursor.getString(nameCol) else null) ?: "unknown_file"
                 val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
+                if (QuarantineManager.recentlyRestoredIds.remove(id)) continue
                 scope.launch {
                     if (!isTrustedSource(owner)) onFileArrived(uri, displayName)
                 }

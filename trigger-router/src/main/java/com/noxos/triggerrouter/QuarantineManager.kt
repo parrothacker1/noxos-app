@@ -1,5 +1,6 @@
 package com.noxos.triggerrouter
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
@@ -7,6 +8,7 @@ import android.provider.MediaStore
 import com.noxos.audit.QuarantineRepository
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Physically moves a file the EXIF parser flagged as malformed out of MediaStore.Downloads and
@@ -46,12 +48,22 @@ class QuarantineManager(
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val restoredUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, insertValues) ?: return false
+        recentlyRestoredIds.add(ContentUris.parseId(restoredUri))
         resolver.openOutputStream(restoredUri)?.use { it.write(file.readBytes()) }
         resolver.update(restoredUri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
 
         file.delete()
         quarantineRepository.remove(id)
         return true
+    }
+
+    companion object {
+        /**
+         * MediaStore row IDs [restore] just wrote back into Downloads, checked (and consumed) by
+         * [FileArrivalWatcher] so a force-allowed file doesn't get immediately re-detected as a
+         * "new arrival" and quarantined again right after the user explicitly restored it.
+         */
+        val recentlyRestoredIds: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     }
 
     suspend fun deletePermanently(id: Long) {
