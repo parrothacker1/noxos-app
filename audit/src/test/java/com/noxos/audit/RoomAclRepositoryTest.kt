@@ -170,4 +170,44 @@ class RoomAclRepositoryTest {
         assertTrue(entry.cheapFilterChecked)
         assertEquals("cheap filter: suspicious header", entry.reason)
     }
+
+    @Test
+    fun testNextCheapFilterBatchExcludesAStrandedEntryPastTheStalenessWindow() = runBlocking {
+        // Simulates a destination whose sample was lost (process restart, or a prior VM attempt
+        // that came back Unknown) - it never gets cheapFilterChecked, so without a staleness
+        // cutoff it would sit at the front of this oldest-first query forever.
+        db.aclDao().insertIfAbsent(
+            AclEntity(
+                AclKind.NETWORK, "stranded", AclState.FLAGGED, AclPriority.HIGH, "pending",
+                updatedAtEpochMillis = System.currentTimeMillis() - java.util.concurrent.TimeUnit.MINUTES.toMillis(30)
+            )
+        )
+        repository.flagIfUnknown(AclKind.NETWORK, "fresh", AclPriority.HIGH, "pending")
+
+        val batch = repository.nextCheapFilterBatch(limit = 10)
+
+        assertEquals(1, batch.size)
+        assertEquals("fresh", batch.single().subject)
+    }
+
+    @Test
+    fun testStrandedEntriesDoNotStarveFreshOnesOutOfTheBatch() = runBlocking {
+        // The actual regression: once enough stranded entries accumulate, oldest-first with no
+        // cutoff means they permanently fill every batch and no new destination ever gets
+        // cheap-filter-checked again.
+        repeat(5) { i ->
+            db.aclDao().insertIfAbsent(
+                AclEntity(
+                    AclKind.NETWORK, "stranded-$i", AclState.FLAGGED, AclPriority.HIGH, "pending",
+                    updatedAtEpochMillis = System.currentTimeMillis() - java.util.concurrent.TimeUnit.MINUTES.toMillis(30)
+                )
+            )
+        }
+        repository.flagIfUnknown(AclKind.NETWORK, "fresh", AclPriority.HIGH, "pending")
+
+        val batch = repository.nextCheapFilterBatch(limit = 5)
+
+        assertEquals(1, batch.size)
+        assertEquals("fresh", batch.single().subject)
+    }
 }

@@ -77,8 +77,15 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
     }
 
     override suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry> {
+        // A destination whose sample was lost (process restart, or a prior VM attempt that came
+        // back Unknown) never gets cheapFilterChecked set and never gets a fresh sample either -
+        // it would otherwise sit at the front of this oldest-first query forever, permanently
+        // filling every batch once enough of them accumulate. Excluding anything past a staleness
+        // window gives up on it for good (matches the accepted "explicitly accept the loss"
+        // stance) instead of it silently starving every destination flagged after it.
+        val cutoff = System.currentTimeMillis() - CHEAP_FILTER_STALE_MS
         return dao.entriesByKindAndState(AclKind.NETWORK, AclState.FLAGGED)
-            .filter { !it.cheapFilterChecked }
+            .filter { !it.cheapFilterChecked && it.updatedAtEpochMillis >= cutoff }
             .sortedBy { it.updatedAtEpochMillis }
             .take(limit)
             .map { it.toEntry() }
@@ -104,6 +111,10 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
         kind, subject, state, priority, reason, updatedAtEpochMillis,
         safetyScore, sessionOnly, cheapFilterChecked, destPort, protocol
     )
+
+    companion object {
+        private const val CHEAP_FILTER_STALE_MS = 5 * 60 * 1000L
+    }
 }
 
 object AclModule {
