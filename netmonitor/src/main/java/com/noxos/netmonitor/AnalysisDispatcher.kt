@@ -69,12 +69,21 @@ class AnalysisDispatcher(
                 connection.setRequestProperty("Content-Type", "application/json")
                 if (apiKey.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $apiKey")
 
-                val body = "{" +
-                    "\"ip\":${jsonEscaped(entry.subject)}," +
-                    "\"priority\":${jsonEscaped(entry.priority.name)}," +
-                    "\"reason\":${jsonEscaped(entry.reason)}," +
-                    "\"first_flagged_epoch_millis\":${entry.updatedAtEpochMillis}" +
-                    "}"
+                val body = buildString {
+                    append("{")
+                    append("\"ip\":${jsonEscaped(entry.subject)},")
+                    append("\"priority\":${jsonEscaped(entry.priority.name)},")
+                    append("\"reason\":${jsonEscaped(entry.reason)},")
+                    append("\"first_flagged_epoch_millis\":${entry.updatedAtEpochMillis}")
+                    // The model's real trained vocabulary is lowercase ("tcp"/"udp") with no
+                    // "other" category and no port column at all - only send what it can use.
+                    when (entry.protocol) {
+                        "TCP" -> append(",\"proto\":\"tcp\"")
+                        "UDP" -> append(",\"proto\":\"udp\"")
+                    }
+                    entry.destPort?.let { append(",\"dst_port\":$it") }
+                    append("}")
+                }
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
 
                 if (connection.responseCode != 200) {

@@ -34,6 +34,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 class NetMonitorService : VpnService() {
 
@@ -67,13 +68,26 @@ class NetMonitorService : VpnService() {
         val connectionsInspected = MutableStateFlow(0)
 
         /**
-         * A single-packet sample captured the instant a destination is newly flagged, keyed by
-         * destination IP - consumed (and removed) by [NetworkSampleVmDispatcher] when it submits
-         * that destination to the pVM cheap filter. In-memory only: a destination that survives
-         * an app restart without ever being consumed loses its sample and won't get cheap-filter
-         * checked until it's flagged again in a fresh process. Known, deliberate limitation.
+         * Packet samples captured for a newly-flagged destination, keyed by destination IP -
+         * consumed (and removed) by [NetworkSampleVmDispatcher] when it submits that destination
+         * to the pVM cheap filter. Starts with the outbound packet that caused the flag; the first
+         * inbound reply (if one arrives before the dispatcher consumes it) is appended too, via
+         * [appendPendingSample] - see [TcpRelayManager]'s `onInboundSample` callback and
+         * `pumpUdpReplies` below. Capped at [MAX_SAMPLES_PER_DESTINATION] per destination.
+         * In-memory only: a destination that survives an app restart without ever being consumed
+         * loses its sample and won't get cheap-filter checked until it's flagged again in a fresh
+         * process. Known, deliberate limitation.
          */
-        val pendingPacketSamples = ConcurrentHashMap<String, ByteArray>()
+        val pendingPacketSamples = ConcurrentHashMap<String, CopyOnWriteArrayList<ByteArray>>()
+
+        private const val MAX_SAMPLES_PER_DESTINATION = 2
+
+        /** No-op if [ip] isn't already pending (never buffers samples for a destination nobody asked about). */
+        fun appendPendingSample(ip: String, bytes: ByteArray) {
+            val list = pendingPacketSamples[ip] ?: return
+            if (list.size >= MAX_SAMPLES_PER_DESTINATION) return
+            list.add(bytes)
+        }
 
         const val ACTION_START = "com.noxos.netmonitor.START"
         const val ACTION_STOP  = "com.noxos.netmonitor.STOP"
@@ -194,7 +208,7 @@ class NetMonitorService : VpnService() {
         val inStream  = FileInputStream(vpnIface.fileDescriptor)
         val outStream = FileOutputStream(vpnIface.fileDescriptor)
 
-        val tcp = TcpRelayManager(serviceScope, ::protect, outStream)
+        val tcp = TcpRelayManager(serviceScope, ::protect, outStream, onInboundSample = ::appendPendingSample)
         tcpRelay = tcp
 
         Log.i(TAG, "capture loop started")
@@ -248,7 +262,7 @@ class NetMonitorService : VpnService() {
                     17 -> "UDP"
                     else -> "OTHER"
                 }
-                pendingPacketSamples[dstIpStr] = buf.copyOf(len)
+                pendingPacketSamples.getOrPut(dstIpStr) { CopyOnWriteArrayList() }.add(buf.copyOf(len))
                 aclRepository?.let { acl ->
                     serviceScope.launch {
                         acl.flagIfUnknown(AclKind.NETWORK, dstIpStr, priority, "new destination, pending analysis", destPort, protocolName)
@@ -328,6 +342,8 @@ class NetMonitorService : VpnService() {
 
                 val remoteIp = reply.address.address
                 if (remoteIp.size != 4) continue
+
+                appendPendingSample(remoteIp.joinToString(".") { (it.toInt() and 0xFF).toString() }, buf.copyOf(reply.length))
 
                 val response = PacketUtils.buildUdpPacket(
                     srcIp = remoteIp, srcPort = reply.port,

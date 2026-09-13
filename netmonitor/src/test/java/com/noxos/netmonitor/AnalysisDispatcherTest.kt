@@ -29,15 +29,33 @@ class AnalysisDispatcherTest {
         var receivedAuthHeader: String? = null
             private set
 
+        @Volatile
+        var receivedBody: String? = null
+            private set
+
         private val thread = Thread {
             try {
                 val client = socket.accept()
                 val reader = BufferedReader(InputStreamReader(client.getInputStream()))
                 var line: String?
+                var contentLength = 0
                 while (reader.readLine().also { line = it } != null && line!!.isNotEmpty()) {
                     if (line!!.startsWith("Authorization:", ignoreCase = true)) {
                         receivedAuthHeader = line!!.substringAfter(":").trim()
                     }
+                    if (line!!.startsWith("Content-Length:", ignoreCase = true)) {
+                        contentLength = line!!.substringAfter(":").trim().toInt()
+                    }
+                }
+                if (contentLength > 0) {
+                    val buf = CharArray(contentLength)
+                    var read = 0
+                    while (read < contentLength) {
+                        val n = reader.read(buf, read, contentLength - read)
+                        if (n == -1) break
+                        read += n
+                    }
+                    receivedBody = String(buf, 0, read)
                 }
                 val bytes = body.toByteArray(Charsets.UTF_8)
                 val out = client.getOutputStream()
@@ -126,5 +144,47 @@ class AnalysisDispatcherTest {
     @Test
     fun `returns null when the endpoint is unreachable`() {
         assertNull(AnalysisDispatcher.requestVerdict("http://127.0.0.1:1", "", entry()))
+    }
+
+    @Test
+    fun `sends the model's real lowercase proto vocabulary, not the app's own TCP-UDP-OTHER labels`() {
+        val server = FakeServer(200, """{"verdict":"allow"}""").start()
+        try {
+            val tcpEntry = entry().copy(protocol = "TCP", destPort = 443)
+            AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", tcpEntry)
+
+            val body = server.receivedBody
+            assertEquals(true, body?.contains("\"proto\":\"tcp\""))
+            assertEquals(true, body?.contains("\"dst_port\":443"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `an OTHER protocol (e_g_ ICMP) omits proto entirely rather than sending an invalid value`() {
+        val server = FakeServer(200, """{"verdict":"allow"}""").start()
+        try {
+            val otherEntry = entry().copy(protocol = "OTHER")
+            AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", otherEntry)
+
+            assertEquals(false, server.receivedBody?.contains("\"proto\""))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun `no protocol captured yet omits proto and dst_port rather than sending nulls`() {
+        val server = FakeServer(200, """{"verdict":"allow"}""").start()
+        try {
+            AnalysisDispatcher.requestVerdict("http://127.0.0.1:${server.port}", "", entry())
+
+            val body = server.receivedBody
+            assertEquals(false, body?.contains("\"proto\""))
+            assertEquals(false, body?.contains("\"dst_port\""))
+        } finally {
+            server.stop()
+        }
     }
 }

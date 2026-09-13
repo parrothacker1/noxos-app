@@ -19,6 +19,29 @@ object VmPayloadProtocol {
         return buffer.array()
     }
 
+    /**
+     * [TASK_NETWORK_SAMPLE]'s payload shape: a small, self-contained list of raw packets, not
+     * always exactly one - a newly-flagged destination's sample can include both the outbound
+     * packet that caused the flag and the first inbound reply, captured separately (see
+     * NetMonitorService.pendingPacketSamples). Framing: `[2-byte unsigned count][per packet:
+     * 4-byte length][packet bytes]...`. Note the packets themselves aren't uniform: the outbound
+     * one is a full captured IPv4 packet (as seen on the tun interface); an inbound UDP reply is
+     * bare UDP payload bytes only (as received from the real OS socket - no synthetic IP/UDP
+     * header reconstructed), while an inbound TCP reply is the raw bytes read from the relayed
+     * socket's InputStream (also no synthetic header). The guest-side check needs to handle a
+     * mixed list, not assume every entry is a parseable IPv4 packet.
+     */
+    fun encodePacketSamples(samples: List<ByteArray>): ByteArray {
+        val totalLen = 2 + samples.sumOf { 4 + it.size }
+        val buffer = ByteBuffer.allocate(totalLen)
+        buffer.putShort(samples.size.toShort())
+        samples.forEach { sample ->
+            buffer.putInt(sample.size)
+            buffer.put(sample)
+        }
+        return buffer.array()
+    }
+
     fun decodeResponse(responseBytes: ByteArray): Response {
         if (responseBytes.size < 1) {
             throw IllegalArgumentException("Response too short")

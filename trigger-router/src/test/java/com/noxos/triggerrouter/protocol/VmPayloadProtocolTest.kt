@@ -26,6 +26,28 @@ class VmPayloadProtocolTest {
     }
 
     @Test
+    fun testEncodePacketSamplesFramesEachPacketWithItsOwnLengthPrefix() {
+        val outbound = byteArrayOf(1, 2, 3)
+        val inbound = byteArrayOf(9, 8)
+        val encoded = VmPayloadProtocol.encodePacketSamples(listOf(outbound, inbound))
+
+        val expected = ByteBuffer.allocate(2 + 4 + 3 + 4 + 2)
+            .putShort(2)
+            .putInt(3).put(outbound)
+            .putInt(2).put(inbound)
+            .array()
+        assertArrayEquals(expected, encoded)
+    }
+
+    @Test
+    fun testEncodePacketSamplesHandlesASingleSample() {
+        val encoded = VmPayloadProtocol.encodePacketSamples(listOf(byteArrayOf(5, 5)))
+
+        val expected = ByteBuffer.allocate(2 + 4 + 2).putShort(1).putInt(2).put(byteArrayOf(5, 5)).array()
+        assertArrayEquals(expected, encoded)
+    }
+
+    @Test
     fun testDecodeResponse() {
         val json = "{\"key\":\"value\"}"
         val jsonBytes = json.toByteArray(Charsets.UTF_8)

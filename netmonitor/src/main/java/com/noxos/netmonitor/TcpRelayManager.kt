@@ -13,7 +13,8 @@ import kotlin.random.Random
 internal class TcpRelayManager(
     private val scope: CoroutineScope,
     private val protect: (Socket) -> Boolean,
-    private val outStream: OutputStream
+    private val outStream: OutputStream,
+    private val onInboundSample: (String, ByteArray) -> Unit = { _, _ -> }
 ) {
     companion object {
         const val FLAG_FIN = 0x01
@@ -127,12 +128,14 @@ internal class TcpRelayManager(
         session.state = State.ESTABLISHED
         sendControl(session, srcIp, srcPort, dstIp, dstPort, FLAG_SYN or FLAG_ACK, consumeSeq = true)
 
+        val dstIpStr = dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }
         val buf = ByteArray(16384)
         try {
             val input = session.socket.getInputStream()
             while (true) {
                 val n = input.read(buf)
                 if (n < 0) break
+                onInboundSample(dstIpStr, buf.copyOf(n))
                 writeSegment(session, srcIp, srcPort, dstIp, dstPort, FLAG_ACK, buf, n)
                 session.ourSeq = (session.ourSeq + n) and 0xFFFFFFFFL
             }

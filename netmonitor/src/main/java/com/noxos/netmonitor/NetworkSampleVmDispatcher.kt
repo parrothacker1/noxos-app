@@ -32,9 +32,9 @@ class NetworkSampleVmDispatcher(
     suspend fun run() {
         while (true) {
             aclRepository.nextCheapFilterBatch(BATCH_SIZE).forEach { entry ->
-                val sample = NetMonitorService.pendingPacketSamples.remove(entry.subject)
-                if (sample != null) {
-                    when (val verdict = checkSample(context, vmSessionFactory, sample)) {
+                val samples = NetMonitorService.pendingPacketSamples.remove(entry.subject)
+                if (!samples.isNullOrEmpty()) {
+                    when (val verdict = checkSample(context, vmSessionFactory, samples.toList())) {
                         CheapFilterVerdict.Clean ->
                             aclRepository.allow(AclKind.NETWORK, entry.subject, "cheap filter: clean", sessionOnly = true)
                         is CheapFilterVerdict.Flagged ->
@@ -56,11 +56,12 @@ class NetworkSampleVmDispatcher(
         private val FLAGGED_FIELD = Regex(""""flagged"\s*:\s*(true|false)""")
         private val REASON_FIELD = Regex(""""reason"\s*:\s*"((?:[^"\\]|\\.)*)"""")
 
-        internal suspend fun checkSample(context: Context, vmSessionFactory: VmSessionFactory, sample: ByteArray): CheapFilterVerdict {
+        internal suspend fun checkSample(context: Context, vmSessionFactory: VmSessionFactory, samples: List<ByteArray>): CheapFilterVerdict {
             return try {
                 vmSessionFactory.createSession(context).use { session ->
                     val transport = session.getTransport()
-                    transport.send(VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_NETWORK_SAMPLE, sample))
+                    val payload = VmPayloadProtocol.encodePacketSamples(samples)
+                    transport.send(VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_NETWORK_SAMPLE, payload))
                     val decoded = VmPayloadProtocol.decodeResponse(transport.receive())
                     if (decoded.status != 0) return@use CheapFilterVerdict.Unknown
 
