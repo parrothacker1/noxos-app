@@ -10,10 +10,6 @@ import org.robolectric.annotation.Config
 @Config(sdk = [33])
 class OnDeviceNetworkClassifierTest {
 
-    // A hand-written, deliberately tiny two-tree ensemble - not a real trained model - just
-    // enough to prove the interpreter walks splits/leaves/defaults correctly. Real trees come
-    // from noxos-inference's future model-export step (see knowledge-graph/noxos-inference/TASKS.md
-    // for the exact JSON contract this test is exercising).
     private val modelJson = """
         {
           "base_score": 0.0,
@@ -51,8 +47,6 @@ class OnDeviceNetworkClassifierTest {
 
     @Test
     fun `a missing feature falls back to the model's own bundled default`() {
-        // dst_port omitted entirely - defaults to 443.0, which is < 1024 -> left leaf (-2.0),
-        // same as if the caller had actually supplied 443f.
         val withDefault = classifier.classify(mapOf("byte_count" to 200f))
         val withExplicitValue = classifier.classify(mapOf("dst_port" to 443f, "byte_count" to 200f))
 

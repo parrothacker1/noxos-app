@@ -24,9 +24,6 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # ponytail: no signing config exists yet (this app ships signed inside
-      # the OS image eventually, not as a standalone Play-style release) —
-      # release APKs here are unsigned until that infra exists.
       - name: Build release APK
         run: ./gradlew :app:assembleRelease
 

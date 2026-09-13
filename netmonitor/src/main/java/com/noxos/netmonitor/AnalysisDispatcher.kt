@@ -75,8 +75,6 @@ class AnalysisDispatcher(
                     append("\"priority\":${jsonEscaped(entry.priority.name)},")
                     append("\"reason\":${jsonEscaped(entry.reason)},")
                     append("\"first_flagged_epoch_millis\":${entry.updatedAtEpochMillis}")
-                    // The model's real trained vocabulary is lowercase ("tcp"/"udp") with no
-                    // "other" category and no port column at all - only send what it can use.
                     when (entry.protocol) {
                         "TCP" -> append(",\"proto\":\"tcp\"")
                         "UDP" -> append(",\"proto\":\"udp\"")

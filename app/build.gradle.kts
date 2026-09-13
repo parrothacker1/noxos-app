@@ -19,8 +19,6 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            // ponytail: debug-keystore signing so release APKs are actually
-            // installable. Swap for a real signing config before real distribution.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -46,7 +44,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.lifecycle.runtime.ktx)
 
-    // Compose
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)

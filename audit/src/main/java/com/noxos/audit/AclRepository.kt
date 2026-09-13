@@ -26,19 +26,14 @@ interface AclRepository {
     fun observeAll(): Flow<List<AclEntry>>
     fun observeKind(kind: AclKind): Flow<List<AclEntry>>
 
-    /** Up to [limit] flagged network entries that already cleared the pVM cheap filter, highest priority and oldest first. */
     suspend fun nextAnalysisBatch(limit: Int): List<AclEntry>
 
-    /** Up to [limit] flagged network entries still awaiting the pVM cheap filter, oldest first. */
     suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry>
 
-    /** Records that the pVM cheap filter itself flagged this destination - stays FLAGGED, but is now eligible for [nextAnalysisBatch]. */
     suspend fun markCheapFilterFlagged(kind: AclKind, subject: String, reason: String)
 
-    /** Seeds well-known-safe network hosts. Never overwrites an existing entry (user or AI set). */
     suspend fun seedDefaults()
 
-    /** Forgets AI-sourced verdicts of [kind] (sessionOnly = true) - a fresh session re-asks. Never touches user/seed entries. */
     suspend fun clearSessionVerdicts(kind: AclKind)
 }
 
@@ -77,12 +72,6 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
     }
 
     override suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry> {
-        // A destination whose sample was lost (process restart, or a prior VM attempt that came
-        // back Unknown) never gets cheapFilterChecked set and never gets a fresh sample either -
-        // it would otherwise sit at the front of this oldest-first query forever, permanently
-        // filling every batch once enough of them accumulate. Excluding anything past a staleness
-        // window gives up on it for good (matches the accepted "explicitly accept the loss"
-        // stance) instead of it silently starving every destination flagged after it.
         val cutoff = System.currentTimeMillis() - CHEAP_FILTER_STALE_MS
         return dao.entriesByKindAndState(AclKind.NETWORK, AclState.FLAGGED)
             .filter { !it.cheapFilterChecked && it.updatedAtEpochMillis >= cutoff }

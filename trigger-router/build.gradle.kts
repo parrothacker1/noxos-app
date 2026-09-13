@@ -24,11 +24,6 @@ android {
     }
 }
 
-// android.system.virtualmachine.* (VirtualMachine/VirtualMachineManager/VirtualMachineConfig) are
-// @SystemApi — absent from the public compileSdk jar. Google's own reference app builds against
-// them via Soong's sdk_version "system_current", which resolves to prebuilts/sdk/<api>/system/android.jar
-// inside an AOSP tree. We're a plain Gradle project with no AOSP checkout, so fetch that same jar
-// from AOSP's public git mirror instead. Verified present: android/system/virtualmachine/*.class.
 val avfStubJar = layout.buildDirectory.file("avf-stubs/android-system-35.jar")
 
 val fetchAvfSystemStub by tasks.registering {
@@ -53,10 +48,8 @@ dependencies {
     implementation(project(":audit"))
     compileOnly(files(avfStubJar))
 
-    // Coroutines
     implementation(libs.kotlinx.coroutines.core)
 
-    // Unit tests
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
