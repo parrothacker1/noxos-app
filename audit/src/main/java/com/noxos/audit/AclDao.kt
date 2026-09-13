@@ -31,4 +31,25 @@ interface AclDao {
 
     @Query("UPDATE acl_entries SET cheapFilterChecked = 1, reason = :reason, updatedAtEpochMillis = :updatedAtEpochMillis WHERE kind = :kind AND subject = :subject")
     suspend fun markCheapFilterChecked(kind: AclKind, subject: String, reason: String, updatedAtEpochMillis: Long)
+
+    @Query("""
+        UPDATE acl_entries SET
+            srcPacketCount = :srcPacketCount,
+            srcByteCount = :srcByteCount,
+            dstPacketCount = :dstPacketCount,
+            dstByteCount = :dstByteCount,
+            durationMillis = :durationMillis,
+            handshakeLatencyMillis = :handshakeLatencyMillis
+        WHERE kind = :kind AND subject = :subject
+    """)
+    suspend fun recordConnectionStats(
+        kind: AclKind,
+        subject: String,
+        srcPacketCount: Long,
+        srcByteCount: Long,
+        dstPacketCount: Long,
+        dstByteCount: Long,
+        durationMillis: Long,
+        handshakeLatencyMillis: Long?
+    )
 }

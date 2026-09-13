@@ -23,6 +23,15 @@ class NetworkSampleVmDispatcher(
     suspend fun run() {
         while (true) {
             aclRepository.nextCheapFilterBatch(BATCH_SIZE).forEach { entry ->
+                NetMonitorService.connectionStats.remove(entry.subject)?.let { stats ->
+                    aclRepository.recordConnectionStats(
+                        AclKind.NETWORK, entry.subject,
+                        stats.srcPacketCount.get(), stats.srcByteCount.get(),
+                        stats.dstPacketCount.get(), stats.dstByteCount.get(),
+                        System.currentTimeMillis() - stats.firstSeenAtEpochMillis,
+                        stats.handshakeLatencyMillis
+                    )
+                }
                 val samples = NetMonitorService.pendingPacketSamples.remove(entry.subject)
                 if (!samples.isNullOrEmpty()) {
                     when (val verdict = checkSample(context, vmSessionFactory, samples.toList())) {

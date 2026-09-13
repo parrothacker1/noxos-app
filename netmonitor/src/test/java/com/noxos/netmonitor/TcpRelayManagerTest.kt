@@ -115,4 +115,38 @@ class TcpRelayManagerTest {
         server.close()
         serverThread.join(2000)
     }
+
+    @Test
+    fun `reports a real handshake latency once the real TCP connect succeeds`() {
+        val server = ServerSocket(0)
+        val serverPort = server.localPort
+        val serverThread = Thread { server.accept().close() }
+        serverThread.start()
+
+        val out = CapturingOutputStream()
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val latencies = LinkedBlockingQueue<Pair<String, Long>>()
+        val relay = TcpRelayManager(
+            scope, protect = { _: Socket -> true }, outStream = out,
+            onHandshakeComplete = { ip, latencyMillis -> latencies.put(ip to latencyMillis) }
+        )
+
+        val clientIp = byteArrayOf(10, 0, 0, 2)
+        val serverIp = byteArrayOf(127, 0, 0, 1)
+        val syn = PacketUtils.buildTcpPacket(
+            srcIp = clientIp, srcPort = 40000,
+            dstIp = serverIp, dstPort = serverPort,
+            seq = 1000L, ack = 0, flags = TcpRelayManager.FLAG_SYN,
+            payload = ByteArray(0), payloadOffset = 0, payloadLen = 0
+        )
+        assertTrue(relay.handle(syn, syn.size))
+
+        val (ip, latencyMillis) = latencies.poll(5, TimeUnit.SECONDS)
+            ?: throw AssertionError("onHandshakeComplete was never called")
+        assertEquals("127.0.0.1", ip)
+        assertTrue("expected a non-negative latency, got $latencyMillis", latencyMillis >= 0)
+
+        server.close()
+        serverThread.join(2000)
+    }
 }

@@ -14,5 +14,11 @@ data class AclEntity(
     val sessionOnly: Boolean = false,
     val cheapFilterChecked: Boolean = false,
     val destPort: Int? = null,
-    val protocol: String? = null
+    val protocol: String? = null,
+    val srcPacketCount: Long? = null,
+    val srcByteCount: Long? = null,
+    val dstPacketCount: Long? = null,
+    val dstByteCount: Long? = null,
+    val durationMillis: Long? = null,
+    val handshakeLatencyMillis: Long? = null
 )

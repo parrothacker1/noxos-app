@@ -14,7 +14,8 @@ internal class TcpRelayManager(
     private val scope: CoroutineScope,
     private val protect: (Socket) -> Boolean,
     private val outStream: OutputStream,
-    private val onInboundSample: (String, ByteArray) -> Unit = { _, _ -> }
+    private val onInboundSample: (String, ByteArray) -> Unit = { _, _ -> },
+    private val onHandshakeComplete: (String, Long) -> Unit = { _, _ -> }
 ) {
     companion object {
         const val FLAG_FIN = 0x01
@@ -30,6 +31,7 @@ internal class TcpRelayManager(
         @Volatile var clientNextSeq: Long = 0L
         @Volatile var ourSeq: Long = 0L
         @Volatile var state: State = State.CONNECTING
+        @Volatile var synObservedAtMillis: Long = 0L
     }
 
     private val sessions = ConcurrentHashMap<String, Session>()
@@ -64,6 +66,7 @@ internal class TcpRelayManager(
             if (sessions.containsKey(key)) return true
             val session = Session(Socket())
             session.clientNextSeq = (seq + 1) and 0xFFFFFFFFL
+            session.synObservedAtMillis = System.currentTimeMillis()
             sessions[key] = session
             scope.launch { connectAndRelay(key, session, srcIp, srcPort, dstIp, dstPort) }
             return true
@@ -129,6 +132,7 @@ internal class TcpRelayManager(
         sendControl(session, srcIp, srcPort, dstIp, dstPort, FLAG_SYN or FLAG_ACK, consumeSeq = true)
 
         val dstIpStr = dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }
+        onHandshakeComplete(dstIpStr, System.currentTimeMillis() - session.synObservedAtMillis)
         val buf = ByteArray(16384)
         try {
             val input = session.socket.getInputStream()

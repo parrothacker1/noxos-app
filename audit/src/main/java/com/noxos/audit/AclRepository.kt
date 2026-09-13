@@ -15,7 +15,13 @@ data class AclEntry(
     val sessionOnly: Boolean = false,
     val cheapFilterChecked: Boolean = false,
     val destPort: Int? = null,
-    val protocol: String? = null
+    val protocol: String? = null,
+    val srcPacketCount: Long? = null,
+    val srcByteCount: Long? = null,
+    val dstPacketCount: Long? = null,
+    val dstByteCount: Long? = null,
+    val durationMillis: Long? = null,
+    val handshakeLatencyMillis: Long? = null
 )
 
 interface AclRepository {
@@ -31,6 +37,17 @@ interface AclRepository {
     suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry>
 
     suspend fun markCheapFilterFlagged(kind: AclKind, subject: String, reason: String)
+
+    suspend fun recordConnectionStats(
+        kind: AclKind,
+        subject: String,
+        srcPacketCount: Long,
+        srcByteCount: Long,
+        dstPacketCount: Long,
+        dstByteCount: Long,
+        durationMillis: Long,
+        handshakeLatencyMillis: Long?
+    )
 
     suspend fun seedDefaults()
 
@@ -84,6 +101,19 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
         dao.markCheapFilterChecked(kind, subject, reason, System.currentTimeMillis())
     }
 
+    override suspend fun recordConnectionStats(
+        kind: AclKind,
+        subject: String,
+        srcPacketCount: Long,
+        srcByteCount: Long,
+        dstPacketCount: Long,
+        dstByteCount: Long,
+        durationMillis: Long,
+        handshakeLatencyMillis: Long?
+    ) {
+        dao.recordConnectionStats(kind, subject, srcPacketCount, srcByteCount, dstPacketCount, dstByteCount, durationMillis, handshakeLatencyMillis)
+    }
+
     override suspend fun seedDefaults() {
         AclSeed.WELL_KNOWN_SAFE.forEach { host ->
             dao.insertIfAbsent(
@@ -98,7 +128,8 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
 
     private fun AclEntity.toEntry() = AclEntry(
         kind, subject, state, priority, reason, updatedAtEpochMillis,
-        safetyScore, sessionOnly, cheapFilterChecked, destPort, protocol
+        safetyScore, sessionOnly, cheapFilterChecked, destPort, protocol,
+        srcPacketCount, srcByteCount, dstPacketCount, dstByteCount, durationMillis, handshakeLatencyMillis
     )
 
     companion object {

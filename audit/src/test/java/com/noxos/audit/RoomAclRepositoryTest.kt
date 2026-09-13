@@ -172,6 +172,41 @@ class RoomAclRepositoryTest {
     }
 
     @Test
+    fun testRecordConnectionStatsPersistsAllSixFields() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "1.2.3.4", AclPriority.HIGH, "pending")
+
+        repository.recordConnectionStats(
+            AclKind.NETWORK, "1.2.3.4",
+            srcPacketCount = 5L, srcByteCount = 500L,
+            dstPacketCount = 3L, dstByteCount = 1200L,
+            durationMillis = 250L, handshakeLatencyMillis = 40L
+        )
+
+        val entry = repository.observeKind(AclKind.NETWORK).first().single()
+        assertEquals(5L, entry.srcPacketCount)
+        assertEquals(500L, entry.srcByteCount)
+        assertEquals(3L, entry.dstPacketCount)
+        assertEquals(1200L, entry.dstByteCount)
+        assertEquals(250L, entry.durationMillis)
+        assertEquals(40L, entry.handshakeLatencyMillis)
+    }
+
+    @Test
+    fun testRecordConnectionStatsAllowsNullHandshakeLatencyForNonTcpFlows() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "1.2.3.4", AclPriority.HIGH, "pending", protocol = "UDP")
+
+        repository.recordConnectionStats(
+            AclKind.NETWORK, "1.2.3.4",
+            srcPacketCount = 2L, srcByteCount = 80L,
+            dstPacketCount = 2L, dstByteCount = 80L,
+            durationMillis = 100L, handshakeLatencyMillis = null
+        )
+
+        val entry = repository.observeKind(AclKind.NETWORK).first().single()
+        assertEquals(null, entry.handshakeLatencyMillis)
+    }
+
+    @Test
     fun testNextCheapFilterBatchExcludesAStrandedEntryPastTheStalenessWindow() = runBlocking {
         db.aclDao().insertIfAbsent(
             AclEntity(

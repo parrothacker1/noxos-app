@@ -35,6 +35,18 @@ import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicLong
+
+class ConnectionStats {
+    val srcPacketCount = AtomicLong(0)
+    val srcByteCount = AtomicLong(0)
+    val dstPacketCount = AtomicLong(0)
+    val dstByteCount = AtomicLong(0)
+    val firstSeenAtEpochMillis: Long = System.currentTimeMillis()
+
+    @Volatile
+    var handshakeLatencyMillis: Long? = null
+}
 
 class NetMonitorService : VpnService() {
 
@@ -75,6 +87,25 @@ class NetMonitorService : VpnService() {
             val list = pendingPacketSamples[ip] ?: return
             if (list.size >= MAX_SAMPLES_PER_DESTINATION) return
             list.add(bytes)
+            recordInboundPacket(ip, bytes.size)
+        }
+
+        val connectionStats = ConcurrentHashMap<String, ConnectionStats>()
+
+        fun recordOutboundPacket(ip: String, byteLen: Int) {
+            val stats = connectionStats[ip] ?: return
+            stats.srcPacketCount.incrementAndGet()
+            stats.srcByteCount.addAndGet(byteLen.toLong())
+        }
+
+        fun recordInboundPacket(ip: String, byteLen: Int) {
+            val stats = connectionStats[ip] ?: return
+            stats.dstPacketCount.incrementAndGet()
+            stats.dstByteCount.addAndGet(byteLen.toLong())
+        }
+
+        fun recordHandshakeLatency(ip: String, latencyMillis: Long) {
+            connectionStats[ip]?.handshakeLatencyMillis = latencyMillis
         }
 
         const val ACTION_START = "com.noxos.netmonitor.START"
@@ -177,6 +208,7 @@ class NetMonitorService : VpnService() {
         lastLoggedAt.clear()
         flagAttempted.clear()
         pendingPacketSamples.clear()
+        connectionStats.clear()
         tcpRelay?.closeAll()
         tcpRelay = null
         vpnInterface?.close()
@@ -196,7 +228,11 @@ class NetMonitorService : VpnService() {
         val inStream  = FileInputStream(vpnIface.fileDescriptor)
         val outStream = FileOutputStream(vpnIface.fileDescriptor)
 
-        val tcp = TcpRelayManager(serviceScope, ::protect, outStream, onInboundSample = ::appendPendingSample)
+        val tcp = TcpRelayManager(
+            serviceScope, ::protect, outStream,
+            onInboundSample = ::appendPendingSample,
+            onHandshakeComplete = ::recordHandshakeLatency
+        )
         tcpRelay = tcp
 
         Log.i(TAG, "capture loop started")
@@ -251,12 +287,14 @@ class NetMonitorService : VpnService() {
                     else -> "OTHER"
                 }
                 pendingPacketSamples.getOrPut(dstIpStr) { CopyOnWriteArrayList() }.add(buf.copyOf(len))
+                connectionStats.putIfAbsent(dstIpStr, ConnectionStats())
                 aclRepository?.let { acl ->
                     serviceScope.launch {
                         acl.flagIfUnknown(AclKind.NETWORK, dstIpStr, priority, "new destination, pending analysis", destPort, protocolName)
                     }
                 }
             }
+            recordOutboundPacket(dstIpStr, len)
 
             val forwarded = when (protocol) {
                 17 -> relayUdp(buf, len, outStream)
