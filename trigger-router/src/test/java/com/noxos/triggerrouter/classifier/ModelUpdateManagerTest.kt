@@ -31,25 +31,35 @@ class ModelUpdateManagerTest {
 
     private class FakeHttpServer(body: ByteArray) {
         private val socket = ServerSocket(0)
+        private val ready = java.util.concurrent.CountDownLatch(1)
         val port: Int get() = socket.localPort
 
         private val thread = Thread {
-            try {
-                val client = socket.accept()
-                client.getInputStream().bufferedReader().use { reader ->
-                    while (reader.readLine()?.isNotEmpty() == true) { }
+            ready.countDown()
+            while (!socket.isClosed) {
+                val client = try {
+                    socket.accept()
+                } catch (_: Exception) {
+                    break
                 }
-                val out = client.getOutputStream()
-                out.write("HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
-                out.write(body)
-                out.flush()
-                client.close()
-            } catch (_: Exception) {
+                try {
+                    client.getInputStream().bufferedReader().use { reader ->
+                        while (reader.readLine()?.isNotEmpty() == true) { }
+                    }
+                    val out = client.getOutputStream()
+                    out.write("HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                    out.write(body)
+                    out.flush()
+                } catch (_: Exception) {
+                } finally {
+                    client.close()
+                }
             }
         }
 
         fun start(): FakeHttpServer {
             thread.start()
+            ready.await()
             return this
         }
 
