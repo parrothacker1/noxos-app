@@ -64,11 +64,18 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { }
 
+    // Class-level, not `remember`-ed inside setContent: the VPN permission launcher's callback
+    // (below) fires outside the Composable scope on first grant, and needs to flip this same
+    // state - a local `remember` var there would be write-only from here, leaving the UI
+    // permanently showing "inactive" even once the service is really running.
+    private var netMonitorActive by mutableStateOf(false)
+
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             netMonitor.start(this)
+            netMonitorActive = true
         }
     }
 
@@ -119,7 +126,6 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
-            var netMonitorActive by remember { mutableStateOf(false) }
             var scanJob by remember { mutableStateOf<Job?>(null) }
             var pendingExportJson by remember { mutableStateOf("") }
             val coroutineScope = rememberCoroutineScope()
