@@ -30,6 +30,7 @@ import com.noxos.triggerrouter.FileArrivalWatcher
 import com.noxos.triggerrouter.QuarantineManager
 import com.noxos.triggerrouter.ScanResult
 import com.noxos.triggerrouter.TriggerRouter
+import com.noxos.triggerrouter.classifier.ModelUpdateManager
 import com.noxos.triggerrouter.vm.MicrodroidVmSessionFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var netMonitor: NetMonitor
     private lateinit var fileArrivalWatcher: FileArrivalWatcher
     private lateinit var quarantineManager: QuarantineManager
+    private lateinit var modelUpdateManager: ModelUpdateManager
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -86,6 +88,7 @@ class MainActivity : ComponentActivity() {
         netMonitor = NetMonitor(auditRepository, aclRepository, settingsRepository)
         fileArrivalWatcher = FileArrivalWatcher(applicationContext, aclRepository) { uri, displayName -> handleAutoScan(uri, displayName) }
         quarantineManager = QuarantineManager(applicationContext, quarantineRepository)
+        modelUpdateManager = ModelUpdateManager(applicationContext)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -109,6 +112,7 @@ class MainActivity : ComponentActivity() {
             quarantineManager.purgeOlderThan(RetentionPolicy.cutoffEpochMillis(System.currentTimeMillis(), quarantineRetentionDays))
         }
         lifecycleScope.launch { aclRepository.seedDefaults() }
+        lifecycleScope.launch { modelUpdateManager.checkForUpdateIfStale() }
 
         val versionLabel = runCatching {
             val info = packageManager.getPackageInfo(packageName, 0)

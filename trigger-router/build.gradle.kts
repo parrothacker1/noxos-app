@@ -12,6 +12,11 @@ android {
 
     defaultConfig {
         minSdk = 33
+        buildConfigField(
+            "String",
+            "MODEL_MANIFEST_URL",
+            "\"https://noxos-releases.s3.amazonaws.com/on-device-models/network-classifier/manifest.json\""
+        )
     }
 
     compileOptions {
@@ -21,6 +26,10 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 }
 
