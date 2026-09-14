@@ -24,7 +24,13 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Decode platform keystore
+        run: echo "${{ secrets.NOXOS_PLATFORM_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/platform.jks"
+
       - name: Build release APK
+        env:
+          NOXOS_KEYSTORE_PATH: ${{ runner.temp }}/platform.jks
+          NOXOS_KEYSTORE_PASSWORD: ${{ secrets.NOXOS_PLATFORM_KEYSTORE_PASSWORD }}
         run: ./gradlew :app:assembleRelease
 
       - name: Create GitHub Release

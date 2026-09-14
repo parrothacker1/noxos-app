@@ -16,10 +16,23 @@ android {
         versionName = "2.2.0"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("NOXOS_KEYSTORE_PATH") ?: "debug.keystore")
+            storePassword = System.getenv("NOXOS_KEYSTORE_PASSWORD")
+            keyAlias = "platform"
+            keyPassword = System.getenv("NOXOS_KEYSTORE_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (System.getenv("NOXOS_KEYSTORE_PATH") != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
