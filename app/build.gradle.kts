@@ -22,6 +22,8 @@ android {
             storePassword = System.getenv("NOXOS_KEYSTORE_PASSWORD")
             keyAlias = "platform"
             keyPassword = System.getenv("NOXOS_KEYSTORE_PASSWORD")
+            enableV3Signing = true
+            enableV2Signing = true
         }
     }
 
