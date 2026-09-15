@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (for triggering from another workflow, since GITHUB_TOKEN-authored pushes do not cascade to push-triggered workflows)'
+        required: true
 
 permissions:
   contents: write
@@ -14,6 +19,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve tag name
+        id: tagname
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -37,7 +48,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          gh release create "${{ steps.tagname.outputs.tag }}" \
             app/build/outputs/apk/release/*.apk \
-            --title "${GITHUB_REF_NAME}" \
+            --title "${{ steps.tagname.outputs.tag }}" \
             --generate-notes
