@@ -1,0 +1,99 @@
+name: Sync Payload
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check noxos-payload's latest release
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          latest="$(gh release view --repo parrothacker1/noxos-payload --json tagName -q .tagName 2>/dev/null || true)"
+          if [ -z "$latest" ]; then
+            echo "no noxos-payload release exists yet"
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          synced="$(cat PAYLOAD_VERSION 2>/dev/null || true)"
+          if [ "$latest" = "$synced" ]; then
+            echo "already synced to $latest"
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new payload release: $latest (last synced: ${synced:-none})"
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download payload .so assets
+        if: steps.check.outputs.should_sync == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ steps.check.outputs.tag }}" --repo parrothacker1/noxos-payload --pattern "*.so" --dir /tmp/payload-assets --clobber
+          ls -la /tmp/payload-assets
+
+      - name: Place payload libraries per ABI
+        if: steps.check.outputs.should_sync == 'true'
+        id: place
+        run: |
+          placed=0
+          for f in /tmp/payload-assets/*.so; do
+            [ -e "$f" ] || continue
+            name="$(basename "$f")"
+            case "$name" in
+              *x86_64*) abi=x86_64 ;;
+              *arm64*|*aarch64*) abi=arm64-v8a ;;
+              *x86*) abi=x86 ;;
+              *armeabi*|*armv7*|*arm-*) abi=armeabi-v7a ;;
+              *) echo "unrecognized ABI in asset name: $name, skipping"; continue ;;
+            esac
+            mkdir -p "app/src/main/jniLibs/$abi"
+            cp "$f" "app/src/main/jniLibs/$abi/libnoxos_payload_stub.so"
+            echo "placed $name -> app/src/main/jniLibs/$abi/libnoxos_payload_stub.so"
+            placed=$((placed + 1))
+          done
+          if [ "$placed" -eq 0 ]; then
+            echo "no recognized per-ABI .so assets found in the release, nothing to sync"
+            echo "placed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "placed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump version
+        if: steps.check.outputs.should_sync == 'true' && steps.place.outputs.placed == 'true'
+        id: bump
+        run: |
+          current="$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)"
+          code="$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)"
+          major="$(echo "$current" | cut -d. -f1)"
+          minor="$(echo "$current" | cut -d. -f2)"
+          patch="$(echo "$current" | cut -d. -f3)"
+          new="$major.$minor.$((patch + 1))"
+          newcode=$((code + 1))
+          sed -i "s/versionCode = $code/versionCode = $newcode/" app/build.gradle.kts
+          sed -i "s/versionName = \"$current\"/versionName = \"$new\"/" app/build.gradle.kts
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+
+      - name: Commit, tag, and push
+        if: steps.check.outputs.should_sync == 'true' && steps.place.outputs.placed == 'true'
+        run: |
+          echo "${{ steps.check.outputs.tag }}" > PAYLOAD_VERSION
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            add app/src/main/jniLibs PAYLOAD_VERSION app/build.gradle.kts
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "chore: sync payload library from noxos-payload ${{ steps.check.outputs.tag }}, bump to v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin "v${{ steps.bump.outputs.version }}"
