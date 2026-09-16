@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
+import android.util.Log
 import com.noxos.audit.QuarantineRepository
 import java.io.File
 import java.util.UUID
@@ -21,7 +22,11 @@ class QuarantineManager(
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return false
         val storedFileName = "${UUID.randomUUID()}.bin"
         File(quarantineDir, storedFileName).writeBytes(bytes)
-        context.contentResolver.delete(uri, null, null)
+        try {
+            context.contentResolver.delete(uri, null, null)
+        } catch (e: Exception) {
+            Log.w(TAG, "quarantined $displayName but could not delete the original at $uri", e)
+        }
         quarantineRepository.add(displayName, mimeType, storedFileName, reason)
         return true
     }
@@ -51,6 +56,7 @@ class QuarantineManager(
     }
 
     companion object {
+        private const val TAG = "WardenQuarantineManager"
         val recentlyRestoredIds: MutableSet<Long> = ConcurrentHashMap.newKeySet()
     }
 
