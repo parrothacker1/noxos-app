@@ -47,7 +47,7 @@ class ModelUpdateManager(
         val manifest = parseManifest(manifestJson)
             ?: return fail(meta, now, "malformed manifest")
 
-        if (manifest.version <= meta.version) {
+        if (manifest.sha256.equals(meta.sha256, ignoreCase = true)) {
             writeMeta(meta.copy(lastCheckedAtEpochMillis = now))
             return ModelUpdateResult.UpToDate
         }
@@ -61,7 +61,7 @@ class ModelUpdateManager(
         }
 
         modelFile.writeBytes(modelBytes)
-        writeMeta(Meta(manifest.version, now))
+        writeMeta(Meta(manifest.version, actualSha256, now))
         return ModelUpdateResult.Updated(manifest.version)
     }
 
@@ -70,22 +70,23 @@ class ModelUpdateManager(
         return ModelUpdateResult.Failed(reason)
     }
 
-    private data class Meta(val version: Int, val lastCheckedAtEpochMillis: Long)
+    private data class Meta(val version: Int, val sha256: String, val lastCheckedAtEpochMillis: Long)
 
     private fun readMeta(): Meta {
-        if (!metaFile.exists()) return Meta(0, 0)
+        if (!metaFile.exists()) return Meta(0, "", 0)
         val fields = metaFile.readLines().mapNotNull { line ->
             val parts = line.split("=", limit = 2)
             if (parts.size == 2) parts[0] to parts[1] else null
         }.toMap()
         return Meta(
             version = fields["version"]?.toIntOrNull() ?: 0,
+            sha256 = fields["sha256"] ?: "",
             lastCheckedAtEpochMillis = fields["lastCheckedAtEpochMillis"]?.toLongOrNull() ?: 0
         )
     }
 
     private fun writeMeta(meta: Meta) {
-        metaFile.writeText("version=${meta.version}\nlastCheckedAtEpochMillis=${meta.lastCheckedAtEpochMillis}\n")
+        metaFile.writeText("version=${meta.version}\nsha256=${meta.sha256}\nlastCheckedAtEpochMillis=${meta.lastCheckedAtEpochMillis}\n")
     }
 
     private data class Manifest(val version: Int, val sha256: String, val modelUrl: String)
