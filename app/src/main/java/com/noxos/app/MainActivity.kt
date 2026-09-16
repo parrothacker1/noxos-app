@@ -159,8 +159,18 @@ class MainActivity : ComponentActivity() {
                 scanJob = coroutineScope.launch {
                     val result = triggerRouter.scanFile(uri, filename)
                     scanJob = null
+                    var quarantined = false
+                    if (result !is ScanResult.Success) {
+                        val reason = when (result) {
+                            is ScanResult.Failure -> result.reason
+                            is ScanResult.Error -> result.message
+                            is ScanResult.Success -> ""
+                        }
+                        val mimeType = contentResolver.getType(uri)
+                        quarantined = quarantineManager.quarantine(uri, filename, mimeType, reason)
+                    }
                     if (settingsRepository.scanCompletionAlertsEnabled.first()) {
-                        postScanCompletionNotification(filename, result)
+                        postScanCompletionNotification(filename, result, quarantined)
                     }
                 }
             }
