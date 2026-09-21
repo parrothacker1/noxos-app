@@ -1,10 +1,14 @@
 package com.noxos.netmonitor
 
+import android.content.Context
 import android.util.Log
 import com.noxos.audit.AclEntry
 import com.noxos.audit.AclKind
 import com.noxos.audit.AclRepository
 import com.noxos.audit.WardenSettingsRepository
+import com.noxos.triggerrouter.classifier.ClassifierVerdict
+import com.noxos.triggerrouter.classifier.ModelUpdateManager
+import com.noxos.triggerrouter.classifier.OnDeviceNetworkClassifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -13,32 +17,54 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 class AnalysisDispatcher(
+    context: Context,
     private val aclRepository: AclRepository,
     private val settingsRepository: WardenSettingsRepository
 ) {
+    private val modelUpdateManager = ModelUpdateManager(context)
 
     suspend fun run() {
         while (true) {
             val endpoint = settingsRepository.inferenceEndpointUrl.first().trim().trimEnd('/')
             val aiEnabled = settingsRepository.aiNetworkAnalysisEnabled.first()
 
-            if (endpoint.isNotBlank() && aiEnabled) {
-                val apiKey = settingsRepository.inferenceApiKey.first()
-                aclRepository.nextAnalysisBatch(BATCH_SIZE).forEach { entry ->
-                    resolve(endpoint, apiKey, entry)
-                }
+            aclRepository.nextAnalysisBatch(BATCH_SIZE).forEach { entry ->
+                resolve(entry, endpoint, aiEnabled)
             }
 
             delay(POLL_INTERVAL_MS)
         }
     }
 
-    private suspend fun resolve(endpoint: String, apiKey: String, entry: AclEntry) {
+    private suspend fun resolve(entry: AclEntry, endpoint: String, aiEnabled: Boolean) {
+        val onDeviceVerdict = withContext(Dispatchers.IO) { classifyOnDevice(entry) }
+        if (onDeviceVerdict != null && onDeviceVerdict.verdict == "allow") {
+            aclRepository.allow(
+                AclKind.NETWORK, entry.subject,
+                "on-device: looks benign",
+                onDeviceVerdict.safetyScore, sessionOnly = true
+            )
+            return
+        }
+
+        if (endpoint.isBlank() || !aiEnabled) return
+        val apiKey = settingsRepository.inferenceApiKey.first()
         val response = withContext(Dispatchers.IO) { requestVerdict(endpoint, apiKey, entry) } ?: return
         val reason = response.reasoning?.let { "ai: $it" } ?: "ai: ${response.verdict}"
         when (response.verdict) {
             "allow" -> aclRepository.allow(AclKind.NETWORK, entry.subject, reason, response.safetyScore, sessionOnly = true)
             "block" -> aclRepository.block(AclKind.NETWORK, entry.subject, reason, response.safetyScore, sessionOnly = true)
+        }
+    }
+
+    private fun classifyOnDevice(entry: AclEntry): ClassifierVerdict? {
+        val modelJson = modelUpdateManager.loadCurrentModelJson() ?: return null
+        return try {
+            val classifier = OnDeviceNetworkClassifier(modelJson)
+            classifier.classify(networkFlowFeatures(entry, classifier))
+        } catch (e: Exception) {
+            Log.w(TAG, "on-device classification failed for ${entry.subject}", e)
+            null
         }
     }
 
@@ -58,6 +84,31 @@ class AnalysisDispatcher(
 
         private fun jsonUnescaped(value: String) =
             value.replace("\\\"", "\"").replace("\\n", "\n").replace("\\\\", "\\")
+
+        internal fun networkFlowFeatures(entry: AclEntry, classifier: OnDeviceNetworkClassifier): Map<String, Float> {
+            val features = mutableMapOf<String, Float>()
+            entry.destPort?.let { features["dst_port"] = it.toFloat() }
+            entry.srcByteCount?.let { features["src_byte_count"] = it.toFloat() }
+            entry.srcPacketCount?.let { features["src_packet_count"] = it.toFloat() }
+            entry.dstByteCount?.let { features["dst_byte_count"] = it.toFloat() }
+            entry.dstPacketCount?.let { features["dst_packet_count"] = it.toFloat() }
+            entry.durationMillis?.let { features["duration_millis"] = it.toFloat() }
+            entry.handshakeLatencyMillis?.let { features["handshake_latency_millis"] = it.toFloat() }
+            val srcPackets = entry.srcPacketCount
+            val srcBytes = entry.srcByteCount
+            if (srcPackets != null && srcPackets > 0 && srcBytes != null) {
+                features["smean"] = srcBytes.toFloat() / srcPackets
+            }
+            val dstPackets = entry.dstPacketCount
+            val dstBytes = entry.dstByteCount
+            if (dstPackets != null && dstPackets > 0 && dstBytes != null) {
+                features["dmean"] = dstBytes.toFloat() / dstPackets
+            }
+            entry.protocol?.lowercase()?.let { proto ->
+                classifier.encodeCategory("proto", proto)?.let { features["proto"] = it }
+            }
+            return features
+        }
 
         internal fun requestVerdict(endpoint: String, apiKey: String, entry: AclEntry): NetworkVerdict? {
             return try {

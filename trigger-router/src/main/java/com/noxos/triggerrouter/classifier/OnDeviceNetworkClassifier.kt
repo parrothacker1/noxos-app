@@ -9,6 +9,7 @@ class OnDeviceNetworkClassifier(modelJson: String) {
     private val baseScore: Double
     private val trees: List<JSONObject>
     private val featureDefaults: Map<String, Double>
+    private val categories: Map<String, List<String>>
 
     init {
         val root = JSONObject(modelJson)
@@ -17,6 +18,16 @@ class OnDeviceNetworkClassifier(modelJson: String) {
         trees = (0 until treesArray.length()).map { treesArray.getJSONObject(it) }
         val defaults = root.optJSONObject("feature_defaults") ?: JSONObject()
         featureDefaults = defaults.keys().asSequence().associateWith { defaults.getDouble(it) }
+        val categoriesObj = root.optJSONObject("categories") ?: JSONObject()
+        categories = categoriesObj.keys().asSequence().associateWith { key ->
+            val values = categoriesObj.getJSONArray(key)
+            (0 until values.length()).map { values.getString(it) }
+        }
+    }
+
+    fun encodeCategory(feature: String, value: String): Float? {
+        val index = categories[feature]?.indexOf(value) ?: return null
+        return if (index >= 0) index.toFloat() else null
     }
 
     fun classify(features: Map<String, Float>): ClassifierVerdict {

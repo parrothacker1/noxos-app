@@ -186,7 +186,7 @@ class NetMonitorService : VpnService() {
         val acl = aclRepository
         val settings = settingsRepository
         analysisDispatchJob = if (acl != null && settings != null) {
-            serviceScope.launch { AnalysisDispatcher(acl, settings).run() }
+            serviceScope.launch { AnalysisDispatcher(applicationContext, acl, settings).run() }
         } else null
         networkSampleDispatchJob = acl?.let {
             serviceScope.launch { NetworkSampleVmDispatcher(applicationContext, it, MicrodroidVmSessionFactory()).run() }
