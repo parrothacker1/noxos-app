@@ -63,4 +63,32 @@ class OnDeviceNetworkClassifierTest {
             "expected a safe flow to score higher than a dangerous one: safe=${safe.safetyScore} dangerous=${dangerous.safetyScore}"
         }
     }
+
+    @Test
+    fun `tree threshold comparison uses float32 semantics like XGBoost's own internal comparison, not float64`() {
+        // Verified with real IEEE-754 arithmetic, not a guessed pair: 1472.9423828125f
+        // is the exact float32 value nearest to the double threshold 1472.942383519298.
+        // Compared as float64 the value is strictly less than the threshold (goes left);
+        // compared as float32 (XGBoost's real internal representation) they're exactly
+        // equal, so "value < threshold" is false (goes right) - a genuine branch flip,
+        // matching the real block->allow flip NoxOS Inference found on their side.
+        val boundaryModelJson = """
+            {
+              "base_score": 0.0,
+              "feature_defaults": {},
+              "trees": [
+                {
+                  "feature": "x", "threshold": 1472.942383519298,
+                  "left":  { "leaf": -10.0 },
+                  "right": { "leaf": 10.0 }
+                }
+              ]
+            }
+        """.trimIndent()
+        val boundaryClassifier = OnDeviceNetworkClassifier(boundaryModelJson)
+
+        val verdict = boundaryClassifier.classify(mapOf("x" to 1472.9423828125f))
+
+        assertEquals("block", verdict.verdict)
+    }
 }

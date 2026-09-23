@@ -8,7 +8,7 @@ data class ClassifierVerdict(val verdict: String, val safetyScore: Float)
 class OnDeviceNetworkClassifier(modelJson: String) {
     private val baseScore: Double
     private val trees: List<JSONObject>
-    private val featureDefaults: Map<String, Double>
+    private val featureDefaults: Map<String, Float>
     private val categories: Map<String, List<String>>
 
     init {
@@ -17,7 +17,7 @@ class OnDeviceNetworkClassifier(modelJson: String) {
         val treesArray = root.getJSONArray("trees")
         trees = (0 until treesArray.length()).map { treesArray.getJSONObject(it) }
         val defaults = root.optJSONObject("feature_defaults") ?: JSONObject()
-        featureDefaults = defaults.keys().asSequence().associateWith { defaults.getDouble(it) }
+        featureDefaults = defaults.keys().asSequence().associateWith { defaults.getDouble(it).toFloat() }
         val categoriesObj = root.optJSONObject("categories") ?: JSONObject()
         categories = categoriesObj.keys().asSequence().associateWith { key ->
             val values = categoriesObj.getJSONArray(key)
@@ -47,8 +47,8 @@ class OnDeviceNetworkClassifier(modelJson: String) {
         var current = node
         while (!current.has("leaf")) {
             val featureName = current.getString("feature")
-            val threshold = current.getDouble("threshold")
-            val value = (features[featureName]?.toDouble()) ?: featureDefaults[featureName]
+            val threshold = current.getDouble("threshold").toFloat()
+            val value = features[featureName] ?: featureDefaults[featureName]
             val goLeft = if (value == null) current.optBoolean("default_left", true) else value < threshold
             current = current.getJSONObject(if (goLeft) "left" else "right")
         }
