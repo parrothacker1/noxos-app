@@ -15,7 +15,7 @@ android {
         buildConfigField(
             "String",
             "MODEL_MANIFEST_URL",
-            "\"https://noxos-releases.s3.amazonaws.com/on-device-models/network-classifier/latest/manifest.json\""
+            "\"https://github.com/parrothacker1/noxos-inference/releases/download/student-latest/manifest.json\""
         )
         buildConfigField(
             "String",
