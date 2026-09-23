@@ -17,6 +17,11 @@ android {
             "MODEL_MANIFEST_URL",
             "\"https://noxos-releases.s3.amazonaws.com/on-device-models/network-classifier/latest/manifest.json\""
         )
+        buildConfigField(
+            "String",
+            "AUTOENCODER_MANIFEST_URL",
+            "\"https://noxos-releases.s3.amazonaws.com/on-device-models/autoencoder/latest/manifest.json\""
+        )
     }
 
     compileOptions {

@@ -16,7 +16,6 @@ import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
 import com.noxos.audit.WardenSettingsRepository
-import com.noxos.triggerrouter.vm.MicrodroidVmSessionFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,9 +53,8 @@ class NetMonitorService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var captureJob: Job? = null
     private var aclJob: Job? = null
-    private var aiAnalysisSettingJob: Job? = null
     private var analysisDispatchJob: Job? = null
-    private var networkSampleDispatchJob: Job? = null
+    private var autoencoderDispatchJob: Job? = null
 
     private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
     private val lastLoggedAt = ConcurrentHashMap<String, Long>()
@@ -68,9 +66,6 @@ class NetMonitorService : VpnService() {
 
     @Volatile
     private var aclCache: Map<String, AclState> = emptyMap()
-
-    @Volatile
-    private var aiNetworkAnalysisEnabled: Boolean = true
 
     companion object {
         var auditRepository: AuditRepository? = null
@@ -177,19 +172,13 @@ class NetMonitorService : VpnService() {
             }
         }
 
-        aiAnalysisSettingJob = settingsRepository?.let { settings ->
-            serviceScope.launch {
-                settings.aiNetworkAnalysisEnabled.collect { aiNetworkAnalysisEnabled = it }
-            }
-        }
-
         val acl = aclRepository
         val settings = settingsRepository
         analysisDispatchJob = if (acl != null && settings != null) {
             serviceScope.launch { AnalysisDispatcher(applicationContext, acl, settings).run() }
         } else null
-        networkSampleDispatchJob = acl?.let {
-            serviceScope.launch { NetworkSampleVmDispatcher(applicationContext, it, MicrodroidVmSessionFactory()).run() }
+        autoencoderDispatchJob = acl?.let {
+            serviceScope.launch { AutoencoderDispatcher(applicationContext, it).run() }
         }
 
         captureJob = serviceScope.launch {
@@ -200,9 +189,8 @@ class NetMonitorService : VpnService() {
     private fun stopMonitor() {
         captureJob?.cancel()
         aclJob?.cancel()
-        aiAnalysisSettingJob?.cancel()
         analysisDispatchJob?.cancel()
-        networkSampleDispatchJob?.cancel()
+        autoencoderDispatchJob?.cancel()
         udpSessions.values.forEach { it.close() }
         udpSessions.clear()
         lastLoggedAt.clear()
@@ -278,7 +266,7 @@ class NetMonitorService : VpnService() {
                 continue
             }
 
-            if (verdict == null && aiNetworkAnalysisEnabled && flagAttempted.add(dstIpStr)) {
+            if (verdict == null && flagAttempted.add(dstIpStr)) {
                 val destPort = PacketUtils.destPort(buf, len)
                 val priority = NetworkPriority.classify(destPort)
                 val protocolName = when (protocol) {

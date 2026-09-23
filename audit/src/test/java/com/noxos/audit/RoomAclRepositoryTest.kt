@@ -62,7 +62,7 @@ class RoomAclRepositoryTest {
         repository.flagIfUnknown(AclKind.NETWORK, "low2", AclPriority.LOW, "pending")
         repository.flagIfUnknown(AclKind.NETWORK, "high2", AclPriority.HIGH, "pending")
         listOf("low1", "high1", "low2", "high2").forEach {
-            repository.markCheapFilterFlagged(AclKind.NETWORK, it, "cheap filter: clear to analyze")
+            repository.markAutoencoderFlagged(AclKind.NETWORK, it, "autoencoder: flagged, escalating to student")
         }
 
         val batch = repository.nextAnalysisBatch(limit = 3)
@@ -136,39 +136,58 @@ class RoomAclRepositoryTest {
     }
 
     @Test
-    fun testNextAnalysisBatchOnlySkipsEntriesNotYetCheapFilterChecked() = runBlocking {
-        repository.flagIfUnknown(AclKind.NETWORK, "not-checked", AclPriority.HIGH, "pending")
-        repository.flagIfUnknown(AclKind.NETWORK, "checked", AclPriority.HIGH, "pending")
-        repository.markCheapFilterFlagged(AclKind.NETWORK, "checked", "cheap filter: suspicious header")
+    fun testNextAnalysisBatchOnlyReturnsAutoencoderFlaggedEntries() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "not-flagged", AclPriority.HIGH, "pending")
+        repository.flagIfUnknown(AclKind.NETWORK, "flagged", AclPriority.HIGH, "pending")
+        repository.markAutoencoderFlagged(AclKind.NETWORK, "flagged", "autoencoder: flagged, escalating to student")
 
         val batch = repository.nextAnalysisBatch(limit = 10)
 
         assertEquals(1, batch.size)
-        assertEquals("checked", batch.single().subject)
+        assertEquals("flagged", batch.single().subject)
     }
 
     @Test
-    fun testNextCheapFilterBatchOnlyReturnsUncheckedEntries() = runBlocking {
+    fun testNextAutoencoderBatchOnlyReturnsUncheckedEntries() = runBlocking {
         repository.flagIfUnknown(AclKind.NETWORK, "not-checked", AclPriority.HIGH, "pending")
         repository.flagIfUnknown(AclKind.NETWORK, "checked", AclPriority.HIGH, "pending")
-        repository.markCheapFilterFlagged(AclKind.NETWORK, "checked", "cheap filter: suspicious header")
+        repository.markAutoencoderFlagged(AclKind.NETWORK, "checked", "autoencoder: flagged, escalating to student")
 
-        val batch = repository.nextCheapFilterBatch(limit = 10)
+        val batch = repository.nextAutoencoderBatch(limit = 10)
 
         assertEquals(1, batch.size)
         assertEquals("not-checked", batch.single().subject)
     }
 
     @Test
-    fun testMarkCheapFilterFlaggedUpdatesReasonAndStaysFlagged() = runBlocking {
+    fun testMarkAutoencoderFlaggedBlocksTrafficAndIsSessionScoped() = runBlocking {
         repository.flagIfUnknown(AclKind.NETWORK, "1.2.3.4", AclPriority.HIGH, "pending")
 
-        repository.markCheapFilterFlagged(AclKind.NETWORK, "1.2.3.4", "cheap filter: suspicious header")
+        repository.markAutoencoderFlagged(AclKind.NETWORK, "1.2.3.4", "autoencoder: flagged, escalating to student")
 
         val entry = repository.observeKind(AclKind.NETWORK).first().single()
-        assertEquals(AclState.FLAGGED, entry.state)
-        assertTrue(entry.cheapFilterChecked)
-        assertEquals("cheap filter: suspicious header", entry.reason)
+        assertEquals(AclState.BLOCKED, entry.state)
+        assertTrue(entry.sessionOnly)
+        assertEquals("autoencoder: flagged, escalating to student", entry.reason)
+    }
+
+    @Test
+    fun testMarkAutoencoderFlaggedPreservesCapturedConnectionStats() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "1.2.3.4", AclPriority.HIGH, "pending", destPort = 443, protocol = "TCP")
+        repository.recordConnectionStats(
+            AclKind.NETWORK, "1.2.3.4",
+            srcPacketCount = 5L, srcByteCount = 500L,
+            dstPacketCount = 3L, dstByteCount = 1200L,
+            durationMillis = 250L, handshakeLatencyMillis = 40L
+        )
+
+        repository.markAutoencoderFlagged(AclKind.NETWORK, "1.2.3.4", "autoencoder: flagged, escalating to student")
+
+        val entry = repository.observeKind(AclKind.NETWORK).first().single()
+        assertEquals(443, entry.destPort)
+        assertEquals("TCP", entry.protocol)
+        assertEquals(5L, entry.srcPacketCount)
+        assertEquals(500L, entry.srcByteCount)
     }
 
     @Test
@@ -207,7 +226,7 @@ class RoomAclRepositoryTest {
     }
 
     @Test
-    fun testNextCheapFilterBatchExcludesAStrandedEntryPastTheStalenessWindow() = runBlocking {
+    fun testNextAutoencoderBatchExcludesAStrandedEntryPastTheStalenessWindow() = runBlocking {
         db.aclDao().insertIfAbsent(
             AclEntity(
                 AclKind.NETWORK, "stranded", AclState.FLAGGED, AclPriority.HIGH, "pending",
@@ -216,7 +235,7 @@ class RoomAclRepositoryTest {
         )
         repository.flagIfUnknown(AclKind.NETWORK, "fresh", AclPriority.HIGH, "pending")
 
-        val batch = repository.nextCheapFilterBatch(limit = 10)
+        val batch = repository.nextAutoencoderBatch(limit = 10)
 
         assertEquals(1, batch.size)
         assertEquals("fresh", batch.single().subject)
@@ -234,7 +253,7 @@ class RoomAclRepositoryTest {
         }
         repository.flagIfUnknown(AclKind.NETWORK, "fresh", AclPriority.HIGH, "pending")
 
-        val batch = repository.nextCheapFilterBatch(limit = 5)
+        val batch = repository.nextAutoencoderBatch(limit = 5)
 
         assertEquals(1, batch.size)
         assertEquals("fresh", batch.single().subject)

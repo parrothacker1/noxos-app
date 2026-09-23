@@ -34,9 +34,9 @@ interface AclRepository {
 
     suspend fun nextAnalysisBatch(limit: Int): List<AclEntry>
 
-    suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry>
+    suspend fun nextAutoencoderBatch(limit: Int): List<AclEntry>
 
-    suspend fun markCheapFilterFlagged(kind: AclKind, subject: String, reason: String)
+    suspend fun markAutoencoderFlagged(kind: AclKind, subject: String, reason: String)
 
     suspend fun recordConnectionStats(
         kind: AclKind,
@@ -81,14 +81,13 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
         dao.observeByKind(kind).map { list -> list.map { it.toEntry() } }
 
     override suspend fun nextAnalysisBatch(limit: Int): List<AclEntry> {
-        return dao.entriesByKindAndState(AclKind.NETWORK, AclState.FLAGGED)
-            .filter { it.cheapFilterChecked }
+        return dao.entriesAutoencoderFlagged(AclKind.NETWORK)
             .sortedWith(compareByDescending<AclEntity> { it.priority == AclPriority.HIGH }.thenBy { it.updatedAtEpochMillis })
             .take(limit)
             .map { it.toEntry() }
     }
 
-    override suspend fun nextCheapFilterBatch(limit: Int): List<AclEntry> {
+    override suspend fun nextAutoencoderBatch(limit: Int): List<AclEntry> {
         val cutoff = System.currentTimeMillis() - CHEAP_FILTER_STALE_MS
         return dao.entriesByKindAndState(AclKind.NETWORK, AclState.FLAGGED)
             .filter { !it.cheapFilterChecked && it.updatedAtEpochMillis >= cutoff }
@@ -97,8 +96,8 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
             .map { it.toEntry() }
     }
 
-    override suspend fun markCheapFilterFlagged(kind: AclKind, subject: String, reason: String) {
-        dao.markCheapFilterChecked(kind, subject, reason, System.currentTimeMillis())
+    override suspend fun markAutoencoderFlagged(kind: AclKind, subject: String, reason: String) {
+        dao.markAutoencoderFlagged(kind, subject, reason, System.currentTimeMillis())
     }
 
     override suspend fun recordConnectionStats(

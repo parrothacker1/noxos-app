@@ -15,6 +15,7 @@ class OnDeviceAutoencoder(modelJson: String) {
     private val encoderLayers: List<Layer>
     private val decoderLayers: List<Layer>
     private val anomalyThreshold: Float
+    private val categories: Map<String, List<String>>
 
     private data class Layer(val weights: Array<FloatArray>, val biases: FloatArray, val activation: String)
 
@@ -32,6 +33,17 @@ class OnDeviceAutoencoder(modelJson: String) {
         encoderLayers = root.getJSONArray("encoder_layers").toLayerList()
         decoderLayers = root.getJSONArray("decoder_layers").toLayerList()
         anomalyThreshold = root.getDouble("anomaly_threshold").toFloat()
+
+        val categoriesObj = root.optJSONObject("categories") ?: JSONObject()
+        categories = categoriesObj.keys().asSequence().associateWith { key ->
+            val values = categoriesObj.getJSONArray(key)
+            (0 until values.length()).map { values.getString(it) }
+        }
+    }
+
+    fun encodeCategory(feature: String, value: String): Float? {
+        val index = categories[feature]?.indexOf(value) ?: return null
+        return if (index >= 0) index.toFloat() else null
     }
 
     fun evaluate(features: Map<String, Float>): AutoencoderVerdict {
