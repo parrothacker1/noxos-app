@@ -27,6 +27,8 @@ class ModelUpdateManagerTest {
         val context: Context = ApplicationProvider.getApplicationContext()
         File(context.filesDir, "on_device_network_model.json").delete()
         File(context.filesDir, "on_device_network_model.meta").delete()
+        File(context.filesDir, "on_device_autoencoder_model.json").delete()
+        File(context.filesDir, "on_device_autoencoder_model.meta").delete()
     }
 
     private class FakeHttpServer(body: ByteArray) {
@@ -180,5 +182,37 @@ class ModelUpdateManagerTest {
         val secondResult = manager.checkForUpdateIfStale()
 
         assertEquals(ModelUpdateResult.UpToDate, secondResult)
+    }
+
+    @Test
+    fun `a second model slot (modelName) stores and loads independently of the default network model`() = runBlocking {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val networkBytes = """{"kind":"network"}""".toByteArray()
+        val autoencoderBytes = """{"kind":"autoencoder"}""".toByteArray()
+
+        val networkModelServer = FakeHttpServer(networkBytes).start()
+        val networkManifestServer = FakeHttpServer(
+            """{"version":1,"sha256":"${sha256Hex(networkBytes)}","modelUrl":"http://127.0.0.1:${networkModelServer.port}/model"}""".toByteArray()
+        ).start()
+        val autoencoderModelServer = FakeHttpServer(autoencoderBytes).start()
+        val autoencoderManifestServer = FakeHttpServer(
+            """{"version":1,"sha256":"${sha256Hex(autoencoderBytes)}","modelUrl":"http://127.0.0.1:${autoencoderModelServer.port}/model"}""".toByteArray()
+        ).start()
+
+        val networkManager = ModelUpdateManager(context, manifestUrl = "http://127.0.0.1:${networkManifestServer.port}/manifest")
+        val autoencoderManager = ModelUpdateManager(
+            context,
+            manifestUrl = "http://127.0.0.1:${autoencoderManifestServer.port}/manifest",
+            modelName = "autoencoder"
+        )
+
+        networkManager.ensureModelLoaded()
+        autoencoderManager.ensureModelLoaded()
+
+        assertEquals(String(networkBytes), networkManager.loadCurrentModelJson())
+        assertEquals(String(autoencoderBytes), autoencoderManager.loadCurrentModelJson())
+
+        networkManifestServer.stop(); networkModelServer.stop()
+        autoencoderManifestServer.stop(); autoencoderModelServer.stop()
     }
 }

@@ -18,10 +18,11 @@ sealed class ModelUpdateResult {
 
 class ModelUpdateManager(
     private val context: Context,
-    private val manifestUrl: String = BuildConfig.MODEL_MANIFEST_URL
+    private val manifestUrl: String = BuildConfig.MODEL_MANIFEST_URL,
+    private val modelName: String = "network"
 ) {
-    private val modelFile: File get() = File(context.filesDir, MODEL_FILE_NAME)
-    private val metaFile: File get() = File(context.filesDir, META_FILE_NAME)
+    private val modelFile: File get() = File(context.filesDir, "on_device_${modelName}_model.json")
+    private val metaFile: File get() = File(context.filesDir, "on_device_${modelName}_model.meta")
 
     fun hasLocalModel(): Boolean = modelFile.exists()
 
@@ -105,8 +106,6 @@ class ModelUpdateManager(
     }
 
     companion object {
-        private const val MODEL_FILE_NAME = "on_device_network_model.json"
-        private const val META_FILE_NAME = "on_device_network_model.meta"
         private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
         private const val TIMEOUT_MS = 10_000
 
