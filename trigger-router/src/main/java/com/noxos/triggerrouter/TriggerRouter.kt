@@ -42,12 +42,26 @@ class TriggerRouter(
         }
 
         try {
-            val fileBytes = readFileBytes(fileUri)
-            if (fileBytes == null) {
-                val err = "Could not read file bytes from URI"
-                outcome = AuditOutcome.FAILURE
-                errorMessage = err
-                return ScanResult.Failure(err)
+            val knownLength = statFileLength(fileUri)
+            var bufferedBytes: ByteArray? = null
+
+            if (knownLength != null) {
+                if (knownLength > VmPayloadProtocol.MAX_PAYLOAD_BYTES) {
+                    val err = "File too large (${knownLength / (1024 * 1024)} MB, " +
+                        "max ${VmPayloadProtocol.MAX_PAYLOAD_BYTES / (1024 * 1024)} MB)"
+                    outcome = AuditOutcome.FAILURE
+                    errorMessage = err
+                    return ScanResult.Failure(err)
+                }
+            } else {
+                bufferedBytes = readFileBytesBounded(fileUri)
+                if (bufferedBytes == null) {
+                    val err = "Could not read file, or it exceeds the " +
+                        "${VmPayloadProtocol.MAX_PAYLOAD_BYTES / (1024 * 1024)} MB scan limit"
+                    outcome = AuditOutcome.FAILURE
+                    errorMessage = err
+                    return ScanResult.Failure(err)
+                }
             }
 
             val timeoutMillis = settingsRepository.vmSessionTimeoutSeconds.first() * 1000L
@@ -62,8 +76,15 @@ class TriggerRouter(
                     stepStart = System.currentTimeMillis()
 
                     val transport = session.getTransport()
-                    val requestPayload = VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_FILE_SCAN, fileBytes)
-                    transport.send(requestPayload)
+                    if (knownLength != null) {
+                        val header = VmPayloadProtocol.encodeHeader(VmPayloadProtocol.TASK_FILE_SCAN, knownLength.toInt())
+                        val fileStream = context.contentResolver.openInputStream(fileUri)
+                            ?: throw java.io.IOException("Could not open file for scanning")
+                        fileStream.use { transport.sendStream(header, it, knownLength) }
+                    } else {
+                        val requestPayload = VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_FILE_SCAN, bufferedBytes!!)
+                        transport.send(requestPayload)
+                    }
                     val responsePayload = transport.receive()
 
                     stepDurations[ScanStep.EXECUTING] = System.currentTimeMillis() - stepStart
@@ -147,13 +168,26 @@ class TriggerRouter(
         }
     }
 
-    private fun readFileBytes(uri: Uri): ByteArray? {
+    private fun statFileLength(uri: Uri): Long? {
+        return try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                afd.length.takeIf { it >= 0 }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun readFileBytesBounded(uri: Uri): ByteArray? {
         return try {
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 val byteBuffer = ByteArrayOutputStream()
-                val buffer = ByteArray(1024)
+                val buffer = ByteArray(64 * 1024)
+                var total = 0L
                 var len: Int
                 while (inputStream.read(buffer).also { len = it } != -1) {
+                    total += len
+                    if (total > VmPayloadProtocol.MAX_PAYLOAD_BYTES) return null
                     byteBuffer.write(buffer, 0, len)
                 }
                 byteBuffer.toByteArray()

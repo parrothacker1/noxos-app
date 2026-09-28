@@ -9,11 +9,20 @@ object VmPayloadProtocol {
 
     const val TASK_NETWORK_SAMPLE: Byte = 1
 
+    const val MAX_PAYLOAD_BYTES = 150 * 1024 * 1024
+
     fun encodeRequest(taskType: Byte, payload: ByteArray): ByteArray {
         val buffer = ByteBuffer.allocate(1 + 4 + payload.size)
         buffer.put(taskType)
         buffer.putInt(payload.size)
         buffer.put(payload)
+        return buffer.array()
+    }
+
+    fun encodeHeader(taskType: Byte, payloadLength: Int): ByteArray {
+        val buffer = ByteBuffer.allocate(1 + 4)
+        buffer.put(taskType)
+        buffer.putInt(payloadLength)
         return buffer.array()
     }
 

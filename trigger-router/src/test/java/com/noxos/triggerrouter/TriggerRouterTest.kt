@@ -7,6 +7,7 @@ import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
 import com.noxos.audit.WardenSettingsRepository
+import com.noxos.triggerrouter.protocol.VmPayloadProtocol
 import com.noxos.triggerrouter.vm.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +21,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.RandomAccessFile
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -127,6 +130,55 @@ class TriggerRouterTest {
 
         val audit = auditRepository.recordedEvents.single()
         assertEquals(AuditOutcome.FAILURE, audit.outcome)
+    }
+
+    @Test
+    fun testScanFileRejectsAFileOverTheSizeCapBeforeBootingAVm() = runBlocking {
+        val oversizedFile = File.createTempFile("warden_oversized_test", ".bin")
+        try {
+            RandomAccessFile(oversizedFile, "rw").use { it.setLength(200L * 1024 * 1024) }
+            val oversizedUri = Uri.fromFile(oversizedFile)
+
+            val result = router.scanFile(oversizedUri, "huge.bin")
+
+            assertTrue(result is ScanResult.Failure)
+            val failure = result as ScanResult.Failure
+            assertTrue(failure.reason.contains("File too large"))
+            assertTrue(failure.reason.contains("150 MB"))
+            assertNull("no VM session should ever be created for an oversized file", sessionFactory.lastSession)
+
+            val audit = auditRepository.recordedEvents.single()
+            assertEquals(AuditOutcome.FAILURE, audit.outcome)
+        } finally {
+            oversizedFile.delete()
+        }
+    }
+
+    @Test
+    fun testScanFileStreamsAKnownSizeFileDirectlyInsteadOfBufferingItInMemory() = runBlocking {
+        val realFile = File.createTempFile("warden_stream_test", ".bin")
+        try {
+            realFile.writeBytes("real file contents for streaming".toByteArray(Charsets.UTF_8))
+            val realUri = Uri.fromFile(realFile)
+
+            val jsonResponse = JSONObject().put("make", "Google").toString()
+            val jsonBytes = jsonResponse.toByteArray(Charsets.UTF_8)
+            val responseBytes = ByteArray(1 + jsonBytes.size)
+            responseBytes[0] = 0.toByte()
+            System.arraycopy(jsonBytes, 0, responseBytes, 1, jsonBytes.size)
+            transport.bytesToReceive = responseBytes
+
+            val result = router.scanFile(realUri, "real.bin")
+
+            assertTrue(result is ScanResult.Success)
+            val sent = transport.sentBytes!!
+            val header = sent.copyOfRange(0, 5)
+            val body = sent.copyOfRange(5, sent.size)
+            assertEquals(VmPayloadProtocol.TASK_FILE_SCAN, header[0])
+            assertArrayEquals(realFile.readBytes(), body)
+        } finally {
+            realFile.delete()
+        }
     }
 }
 

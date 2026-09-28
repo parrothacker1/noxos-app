@@ -42,6 +42,7 @@ class MicrodroidVmSessionFactory : VmSessionFactory {
         val config = VirtualMachineConfig.Builder(context)
             .setPayloadBinaryName("libnoxos_payload_stub.so")
             .setProtectedVm(false)
+            .setMemoryBytes(512L * 1024 * 1024)
             .build()
 
         val vmName = "noxos-scan-${UUID.randomUUID()}"

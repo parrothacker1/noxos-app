@@ -1,5 +1,7 @@
 package com.noxos.triggerrouter.vm
 
+import java.io.InputStream
+
 class FakeVmTransport : VmTransport {
     var sentBytes: ByteArray? = null
     var bytesToReceive: ByteArray = byteArrayOf()
@@ -11,6 +13,13 @@ class FakeVmTransport : VmTransport {
             throw Exception("Fake send failed")
         }
         sentBytes = bytes
+    }
+
+    override suspend fun sendStream(header: ByteArray, source: InputStream, length: Long) {
+        if (shouldThrowOnSend) {
+            throw Exception("Fake send failed")
+        }
+        sentBytes = header + source.readBytes()
     }
 
     override suspend fun receive(): ByteArray {
