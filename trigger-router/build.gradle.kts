@@ -20,7 +20,7 @@ android {
         buildConfigField(
             "String",
             "AUTOENCODER_MANIFEST_URL",
-            "\"https://noxos-releases.s3.amazonaws.com/on-device-models/autoencoder/latest/manifest.json\""
+            "\"https://github.com/parrothacker1/noxos-inference/releases/download/autoencoder-latest/manifest.json\""
         )
     }
 

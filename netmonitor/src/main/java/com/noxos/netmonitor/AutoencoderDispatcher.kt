@@ -56,8 +56,8 @@ class AutoencoderDispatcher(
         val modelJson = modelUpdateManager.loadCurrentModelJson() ?: return null
         return try {
             val autoencoder = OnDeviceAutoencoder(modelJson)
-            val features = networkFlowFeatures(entry) { autoencoder.encodeCategory("proto", it) }
-            autoencoder.evaluate(features)
+            val features = networkFlowFeatures(entry) { null }
+            autoencoder.evaluate(features, entry.protocol)
         } catch (e: Exception) {
             Log.w(TAG, "autoencoder evaluation failed for ${entry.subject}", e)
             null
