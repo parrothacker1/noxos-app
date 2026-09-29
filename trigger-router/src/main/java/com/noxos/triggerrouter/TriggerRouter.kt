@@ -108,7 +108,11 @@ class TriggerRouter(
                                     }
                                 }
                                 outcome = AuditOutcome.SUCCESS
-                                resultSummary = "Parsed EXIF successfully"
+                                resultSummary = if (metadata.keys == setOf("file_type")) {
+                                    "Unrecognized file type (${metadata["file_type"]}) — not analyzed, not flagged"
+                                } else {
+                                    "Scan completed, no issues found"
+                                }
                                 ScanResult.Success(ExifData(metadata))
                             }
                         }

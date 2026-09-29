@@ -367,7 +367,11 @@ class MainActivity : ComponentActivity() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
         val text = when (result) {
-            is ScanResult.Success -> "Scan complete — sanitized"
+            is ScanResult.Success -> if (result.exifData.metadata.keys == setOf("file_type")) {
+                "Scan complete — type not deeply inspected, not flagged"
+            } else {
+                "Scan complete — sanitized"
+            }
             is ScanResult.Failure -> if (quarantined) "Quarantined: ${result.reason}" else "Scan flagged: ${result.reason}"
             is ScanResult.Error -> if (quarantined) "Quarantined: ${result.message}" else "Scan error: ${result.message}"
         }

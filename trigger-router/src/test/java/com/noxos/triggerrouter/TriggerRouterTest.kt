@@ -180,6 +180,32 @@ class TriggerRouterTest {
             realFile.delete()
         }
     }
+
+    @Test
+    fun testScanFileWithOnlyFileTypeInResponseIsSuccessNotQuarantinedWithADistinctSummary() = runBlocking {
+        val fileContent = "dummy_file_bytes"
+        shadowOf(context.contentResolver).registerInputStream(
+            testUri,
+            ByteArrayInputStream(fileContent.toByteArray(Charsets.UTF_8))
+        )
+
+        // Matches noxos-payload's real fail-open response for a sane-but-not-deeply-inspected
+        // file type: status 0, unflagged, with only "file_type" in the JSON.
+        val jsonResponse = JSONObject().put("file_type", "unknown").toString()
+        val jsonBytes = jsonResponse.toByteArray(Charsets.UTF_8)
+        val responseBytes = ByteArray(1 + jsonBytes.size)
+        responseBytes[0] = 0.toByte()
+        System.arraycopy(jsonBytes, 0, responseBytes, 1, jsonBytes.size)
+        transport.bytesToReceive = responseBytes
+
+        val result = router.scanFile(testUri, "mystery.bin")
+
+        assertTrue(result is ScanResult.Success)
+        val audit = auditRepository.recordedEvents.single()
+        assertEquals(AuditOutcome.SUCCESS, audit.outcome)
+        assertTrue(audit.resultSummary!!.contains("Unrecognized file type"))
+        assertTrue(audit.resultSummary!!.contains("unknown"))
+    }
 }
 
 class FakeAuditRepository : AuditRepository {
