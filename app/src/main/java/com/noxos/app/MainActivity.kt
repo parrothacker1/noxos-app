@@ -407,11 +407,13 @@ class MainActivity : ComponentActivity() {
             is ScanResult.Failure -> if (quarantined) "Quarantined: ${result.reason}" else "Scan flagged: ${result.reason}"
             is ScanResult.Error -> if (quarantined) "Quarantined: ${result.message}" else "Scan error: ${result.message}"
         }
+        val advisoryText = (result as? ScanResult.Success)?.advisory?.displayText
         val notification = Notification.Builder(this, channelId)
             .setContentTitle(filename)
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setAutoCancel(true)
+            .apply { if (advisoryText != null) setStyle(Notification.BigTextStyle().bigText("$text\n$advisoryText")) }
             .build()
         getSystemService(NotificationManager::class.java).notify(filename.hashCode(), notification)
     }

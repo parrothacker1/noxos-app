@@ -10,6 +10,7 @@ import com.noxos.audit.WardenSettingsRepository
 import com.noxos.triggerrouter.protocol.VmPayloadProtocol
 import com.noxos.triggerrouter.vm.VmSessionFactory
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -106,6 +107,7 @@ class TriggerRouter(
                 enter(ScanStep.SANITIZING)
                 var stepStart = System.currentTimeMillis()
 
+                var advisoryPermissions: List<String>? = null
                 val result = when (decoded.status) {
                     0 -> {
                         val json = JSONObject(decoded.json)
@@ -117,8 +119,13 @@ class TriggerRouter(
                         } else {
                             val metadata = mutableMapOf<String, String>()
                             json.keys().forEach { key ->
-                                if (key != "cheap_filter_flagged" && key != "cheap_filter_reason") {
+                                if (key != "cheap_filter_flagged" && key != "cheap_filter_reason" && key != "permissions") {
                                     metadata[key] = json.optString(key, "")
+                                }
+                            }
+                            if (metadata["file_type"] == "apk") {
+                                advisoryPermissions = json.optJSONArray("permissions")?.let { arr ->
+                                    (0 until arr.length()).map { arr.optString(it) }
                                 }
                             }
                             outcome = AuditOutcome.SUCCESS
@@ -147,9 +154,19 @@ class TriggerRouter(
                     }
                 }
 
+                // Advisory only: extra information for a clean APK, never an input to outcome or quarantine.
+                val finalResult = if (result is ScanResult.Success && !advisoryPermissions.isNullOrEmpty()) {
+                    fetchAdvisory(advisoryPermissions)?.let { advisory ->
+                        resultSummary = "${resultSummary ?: "Scan completed"} | Advisory: ${advisory.displayText}"
+                        result.copy(advisory = advisory)
+                    } ?: result
+                } else {
+                    result
+                }
+
                 stepDurations[ScanStep.SANITIZING] = System.currentTimeMillis() - stepStart
                 enter(ScanStep.DESTROYING)
-                result
+                finalResult
             }
             return scanResult
         } catch (e: TimeoutCancellationException) {
@@ -180,6 +197,20 @@ class TriggerRouter(
                 auditRepository.record(auditEvent)
             }
             enter(ScanStep.DONE)
+        }
+    }
+
+    private suspend fun fetchAdvisory(permissions: List<String>): FileAdvisory? {
+        return try {
+            if (!settingsRepository.aiFileAnalysisEnabled.first()) return null
+            val endpoint = settingsRepository.inferenceEndpointUrl.first().trim()
+            if (endpoint.isBlank()) return null
+            val apiKey = settingsRepository.inferenceApiKey.first()
+            withContext(Dispatchers.IO) { FileAdvisoryClient.request(endpoint, apiKey, permissions) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
         }
     }
 
