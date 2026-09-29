@@ -1,5 +1,4 @@
 import java.net.URL
-import java.util.Base64
 
 plugins {
     alias(libs.plugins.android.library)
@@ -46,10 +45,10 @@ val fetchAvfSystemStub by tasks.registering {
         val out = avfStubJar.get().asFile
         if (!out.exists()) {
             out.parentFile.mkdirs()
-            val b64 = URL(
-                "https://android.googlesource.com/platform/prebuilts/sdk/+/refs/heads/main/35/system/android.jar?format=TEXT"
-            ).readText()
-            out.writeBytes(Base64.getMimeDecoder().decode(b64))
+            // android.googlesource.com had a prolonged (2h+) host-wide 503 outage on 2026-09-28;
+            // this mirror serves the identical AOSP prebuilt as a plain binary download (no base64).
+            URL("https://raw.githubusercontent.com/msft-mirror-aosp/platform.prebuilts.sdk/main/35/system/android.jar")
+                .openStream().use { input -> out.outputStream().use { input.copyTo(it) } }
         }
     }
 }
