@@ -12,7 +12,6 @@ class ConnectionStatsTest {
     @After
     fun clearSharedState() {
         NetMonitorService.connectionStats.clear()
-        NetMonitorService.pendingPacketSamples.clear()
     }
 
     @Test
@@ -50,14 +49,26 @@ class ConnectionStatsTest {
     }
 
     @Test
-    fun `appendPendingSample also counts the sample as an inbound packet`() {
+    fun `every inbound chunk is counted, not just the first one or two`() {
         NetMonitorService.connectionStats["1.2.3.4"] = ConnectionStats()
-        NetMonitorService.pendingPacketSamples["1.2.3.4"] = java.util.concurrent.CopyOnWriteArrayList()
 
-        NetMonitorService.appendPendingSample("1.2.3.4", byteArrayOf(1, 2, 3, 4, 5))
+        repeat(6) { NetMonitorService.recordInboundPacket("1.2.3.4", 100) }
 
         val stats = NetMonitorService.connectionStats.getValue("1.2.3.4")
-        assertEquals(1L, stats.dstPacketCount.get())
-        assertEquals(5L, stats.dstByteCount.get())
+        assertEquals(6L, stats.dstPacketCount.get())
+        assertEquals(600L, stats.dstByteCount.get())
+    }
+
+    @Test
+    fun `recordTcpLifecycle keeps the latest event and ignores an untracked destination`() {
+        NetMonitorService.connectionStats["1.2.3.4"] = ConnectionStats()
+
+        NetMonitorService.recordTcpLifecycle("1.2.3.4", TcpLifecycle.SYN_SEEN)
+        NetMonitorService.recordTcpLifecycle("1.2.3.4", TcpLifecycle.ESTABLISHED)
+        NetMonitorService.recordTcpLifecycle("1.2.3.4", TcpLifecycle.FIN)
+        NetMonitorService.recordTcpLifecycle("9.9.9.9", TcpLifecycle.RST)
+
+        assertEquals(TcpLifecycle.FIN, NetMonitorService.connectionStats.getValue("1.2.3.4").tcpLifecycle)
+        assertNull(NetMonitorService.connectionStats["9.9.9.9"])
     }
 }

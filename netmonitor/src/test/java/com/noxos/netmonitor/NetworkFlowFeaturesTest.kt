@@ -114,4 +114,28 @@ class NetworkFlowFeaturesTest {
         assertNull(features["smean"])
         assertNull(features["dmean"])
     }
+
+    @Test
+    fun `live stats overlay a stale entry's missing counters so they actually reach the features`() {
+        val stale = entry(
+            srcByteCount = null, srcPacketCount = null, dstByteCount = null, dstPacketCount = null,
+            durationMillis = null, handshakeLatencyMillis = null
+        )
+        val stats = ConnectionStats().apply {
+            srcPacketCount.set(4)
+            srcByteCount.set(400)
+            dstPacketCount.set(2)
+            dstByteCount.set(3000)
+            handshakeLatencyMillis = 25L
+        }
+
+        val features = networkFlowFeatures(stale.withLiveStats(stats, stats.firstSeenAtEpochMillis + 700), encodeProto)
+
+        assertEquals(400f, features["src_byte_count"])
+        assertEquals(3000f, features["dst_byte_count"])
+        assertEquals(100f, features["smean"])
+        assertEquals(1500f, features["dmean"])
+        assertEquals(700f, features["duration_millis"])
+        assertEquals(25f, features["handshake_latency_millis"])
+    }
 }

@@ -24,7 +24,14 @@ class AutoencoderDispatcher(
     suspend fun run() {
         while (true) {
             aclRepository.nextAutoencoderBatch(BATCH_SIZE).forEach { entry ->
-                NetMonitorService.connectionStats.remove(entry.subject)?.let { stats ->
+                val stats = NetMonitorService.connectionStats[entry.subject]
+                val verdict = evaluate(entry, stats) ?: run {
+                    Log.w(TAG, "no autoencoder verdict available, leaving ${entry.subject} pending")
+                    return@forEach
+                }
+
+                if (stats != null) {
+                    NetMonitorService.connectionStats.remove(entry.subject)
                     aclRepository.recordConnectionStats(
                         AclKind.NETWORK, entry.subject,
                         stats.srcPacketCount.get(), stats.srcByteCount.get(),
@@ -33,12 +40,6 @@ class AutoencoderDispatcher(
                         stats.handshakeLatencyMillis
                     )
                 }
-
-                val verdict = evaluate(entry) ?: run {
-                    Log.w(TAG, "no autoencoder verdict available, leaving ${entry.subject} pending")
-                    return@forEach
-                }
-
                 if (verdict.anomalous) {
                     aclRepository.markAutoencoderFlagged(
                         AclKind.NETWORK, entry.subject,
@@ -52,7 +53,7 @@ class AutoencoderDispatcher(
         }
     }
 
-    private fun evaluate(entry: AclEntry): AutoencoderVerdict? {
+    private fun evaluate(entry: AclEntry, stats: ConnectionStats?): AutoencoderVerdict? {
         val modelJson = modelUpdateManager.loadCurrentModelJson() ?: return null
         return try {
             val autoencoder = OnDeviceAutoencoder(modelJson)
@@ -62,8 +63,19 @@ class AutoencoderDispatcher(
                 Log.w(TAG, "model needs inputs Warden doesn't capture yet $uncaptured, leaving ${entry.subject} pending")
                 return null
             }
-            val features = networkFlowFeatures(entry) { null }
-            autoencoder.evaluate(features, mapOf("proto" to entry.protocol))
+
+            val now = System.currentTimeMillis()
+            val flow = if (stats != null) entry.withLiveStats(stats, now) else entry
+            val categorical = mutableMapOf<String, String?>("proto" to entry.protocol)
+            if ("state" in autoencoder.categoricalFeatureNames) {
+                // Without live stats (e.g. the process restarted) the state can't be derived; don't guess.
+                val liveStats = stats ?: return null
+                categorical["state"] = deriveConnectionState(
+                    entry.protocol, liveStats.tcpLifecycle,
+                    liveStats.dstPacketCount.get(), now - liveStats.firstSeenAtEpochMillis
+                ) ?: return null
+            }
+            autoencoder.evaluate(networkFlowFeatures(flow) { null }, categorical)
         } catch (e: Exception) {
             Log.w(TAG, "autoencoder evaluation failed for ${entry.subject}", e)
             null

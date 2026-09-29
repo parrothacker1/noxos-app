@@ -7,6 +7,7 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketException
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 
@@ -14,8 +15,9 @@ internal class TcpRelayManager(
     private val scope: CoroutineScope,
     private val protect: (Socket) -> Boolean,
     private val outStream: OutputStream,
-    private val onInboundSample: (String, ByteArray) -> Unit = { _, _ -> },
-    private val onHandshakeComplete: (String, Long) -> Unit = { _, _ -> }
+    private val onInbound: (String, Int) -> Unit = { _, _ -> },
+    private val onHandshakeComplete: (String, Long) -> Unit = { _, _ -> },
+    private val onLifecycle: (String, TcpLifecycle) -> Unit = { _, _ -> }
 ) {
     companion object {
         const val FLAG_FIN = 0x01
@@ -50,20 +52,24 @@ internal class TcpRelayManager(
         val payloadOffset = ihl + dataOffset
         val payloadLen = (len - payloadOffset).coerceAtLeast(0)
 
-        val key = "${srcIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$srcPort-" +
-            "${dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$dstPort"
+        val dstIpStr = dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }
+        val key = "${srcIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$srcPort-$dstIpStr:$dstPort"
         val isSyn = flags and FLAG_SYN != 0
         val isAck = flags and FLAG_ACK != 0
         val isFin = flags and FLAG_FIN != 0
         val isRst = flags and FLAG_RST != 0
 
         if (isRst) {
-            sessions.remove(key)?.let { closeQuietly(it) }
+            sessions.remove(key)?.let {
+                onLifecycle(dstIpStr, TcpLifecycle.RST)
+                closeQuietly(it)
+            }
             return true
         }
 
         if (isSyn && !isAck) {
             if (sessions.containsKey(key)) return true
+            onLifecycle(dstIpStr, TcpLifecycle.SYN_SEEN)
             val session = Session(Socket())
             session.clientNextSeq = (seq + 1) and 0xFFFFFFFFL
             session.synObservedAtMillis = System.currentTimeMillis()
@@ -75,6 +81,7 @@ internal class TcpRelayManager(
         val session = sessions[key] ?: return false
 
         if (isFin) {
+            onLifecycle(dstIpStr, TcpLifecycle.FIN)
             session.clientNextSeq = (session.clientNextSeq + 1) and 0xFFFFFFFFL
             runCatching { session.socket.shutdownOutput() }
             sendControl(session, srcIp, srcPort, dstIp, dstPort, FLAG_ACK)
@@ -133,17 +140,24 @@ internal class TcpRelayManager(
 
         val dstIpStr = dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }
         onHandshakeComplete(dstIpStr, System.currentTimeMillis() - session.synObservedAtMillis)
+        onLifecycle(dstIpStr, TcpLifecycle.ESTABLISHED)
         val buf = ByteArray(16384)
         try {
             val input = session.socket.getInputStream()
             while (true) {
                 val n = input.read(buf)
-                if (n < 0) break
-                onInboundSample(dstIpStr, buf.copyOf(n))
+                if (n < 0) {
+                    onLifecycle(dstIpStr, TcpLifecycle.FIN)
+                    break
+                }
+                onInbound(dstIpStr, n)
                 writeSegment(session, srcIp, srcPort, dstIp, dstPort, FLAG_ACK, buf, n)
                 session.ourSeq = (session.ourSeq + n) and 0xFFFFFFFFL
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is SocketException && e.message?.contains("reset", ignoreCase = true) == true) {
+                onLifecycle(dstIpStr, TcpLifecycle.RST)
+            }
         } finally {
             sendControl(session, srcIp, srcPort, dstIp, dstPort, FLAG_FIN or FLAG_ACK, consumeSeq = true)
             sessions.remove(key)

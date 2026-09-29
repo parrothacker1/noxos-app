@@ -33,7 +33,6 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
 class ConnectionStats {
@@ -45,6 +44,9 @@ class ConnectionStats {
 
     @Volatile
     var handshakeLatencyMillis: Long? = null
+
+    @Volatile
+    var tcpLifecycle: TcpLifecycle? = null
 }
 
 class NetMonitorService : VpnService() {
@@ -74,17 +76,6 @@ class NetMonitorService : VpnService() {
 
         val connectionsInspected = MutableStateFlow(0)
 
-        val pendingPacketSamples = ConcurrentHashMap<String, CopyOnWriteArrayList<ByteArray>>()
-
-        private const val MAX_SAMPLES_PER_DESTINATION = 2
-
-        fun appendPendingSample(ip: String, bytes: ByteArray) {
-            val list = pendingPacketSamples[ip] ?: return
-            if (list.size >= MAX_SAMPLES_PER_DESTINATION) return
-            list.add(bytes)
-            recordInboundPacket(ip, bytes.size)
-        }
-
         val connectionStats = ConcurrentHashMap<String, ConnectionStats>()
 
         fun recordOutboundPacket(ip: String, byteLen: Int) {
@@ -101,6 +92,10 @@ class NetMonitorService : VpnService() {
 
         fun recordHandshakeLatency(ip: String, latencyMillis: Long) {
             connectionStats[ip]?.handshakeLatencyMillis = latencyMillis
+        }
+
+        fun recordTcpLifecycle(ip: String, event: TcpLifecycle) {
+            connectionStats[ip]?.tcpLifecycle = event
         }
 
         const val ACTION_START = "com.noxos.netmonitor.START"
@@ -195,7 +190,6 @@ class NetMonitorService : VpnService() {
         udpSessions.clear()
         lastLoggedAt.clear()
         flagAttempted.clear()
-        pendingPacketSamples.clear()
         connectionStats.clear()
         tcpRelay?.closeAll()
         tcpRelay = null
@@ -218,8 +212,9 @@ class NetMonitorService : VpnService() {
 
         val tcp = TcpRelayManager(
             serviceScope, ::protect, outStream,
-            onInboundSample = ::appendPendingSample,
-            onHandshakeComplete = ::recordHandshakeLatency
+            onInbound = ::recordInboundPacket,
+            onHandshakeComplete = ::recordHandshakeLatency,
+            onLifecycle = ::recordTcpLifecycle
         )
         tcpRelay = tcp
 
@@ -274,7 +269,6 @@ class NetMonitorService : VpnService() {
                     17 -> "UDP"
                     else -> "OTHER"
                 }
-                pendingPacketSamples.getOrPut(dstIpStr) { CopyOnWriteArrayList() }.add(buf.copyOf(len))
                 connectionStats.putIfAbsent(dstIpStr, ConnectionStats())
                 aclRepository?.let { acl ->
                     serviceScope.launch {
@@ -357,7 +351,7 @@ class NetMonitorService : VpnService() {
                 val remoteIp = reply.address.address
                 if (remoteIp.size != 4) continue
 
-                appendPendingSample(remoteIp.joinToString(".") { (it.toInt() and 0xFF).toString() }, buf.copyOf(reply.length))
+                recordInboundPacket(remoteIp.joinToString(".") { (it.toInt() and 0xFF).toString() }, reply.length)
 
                 val response = PacketUtils.buildUdpPacket(
                     srcIp = remoteIp, srcPort = reply.port,

@@ -7,7 +7,16 @@ internal val CAPTURED_NUMERIC_FEATURES = setOf(
     "duration_millis", "handshake_latency_millis", "smean", "dmean"
 )
 
-internal val CAPTURED_CATEGORICAL_FEATURES = setOf("proto")
+internal val CAPTURED_CATEGORICAL_FEATURES = setOf("proto", "state")
+
+internal fun AclEntry.withLiveStats(stats: ConnectionStats, nowMillis: Long): AclEntry = copy(
+    srcPacketCount = stats.srcPacketCount.get(),
+    srcByteCount = stats.srcByteCount.get(),
+    dstPacketCount = stats.dstPacketCount.get(),
+    dstByteCount = stats.dstByteCount.get(),
+    durationMillis = nowMillis - stats.firstSeenAtEpochMillis,
+    handshakeLatencyMillis = stats.handshakeLatencyMillis
+)
 
 internal fun networkFlowFeatures(entry: AclEntry, encodeProto: (String) -> Float?): Map<String, Float> {
     val features = mutableMapOf<String, Float>()
