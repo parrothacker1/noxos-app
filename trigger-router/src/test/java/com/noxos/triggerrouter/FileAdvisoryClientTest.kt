@@ -100,9 +100,8 @@ class FileAdvisoryClientTest {
 
     @Test
     fun `an unreachable server gives no advisory instead of throwing`() {
-        val url = FakeInferenceServer().use { it.url }
-
-        assertNull(FileAdvisoryClient.request(url, "k", perms))
+        // Port 1 (tcpmux) is closed on any normal host, so the connection is refused immediately.
+        assertNull(FileAdvisoryClient.request("http://127.0.0.1:1", "k", perms))
     }
 
     @Test
