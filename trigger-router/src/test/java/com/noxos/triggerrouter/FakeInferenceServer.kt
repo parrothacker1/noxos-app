@@ -1,9 +1,14 @@
 package com.noxos.triggerrouter
 
-import com.sun.net.httpserver.HttpServer
-import java.net.InetSocketAddress
+import java.io.BufferedInputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.concurrent.thread
 
+// A minimal one-request-per-connection HTTP server on plain sockets (com.sun.net.httpserver is not on the
+// Android unit-test compile path).
 class FakeInferenceServer(
     private val status: Int = 200,
     private val responseBody: String = ADVISORY_ALLOW
@@ -12,22 +17,71 @@ class FakeInferenceServer(
     data class Recorded(val path: String, val body: String, val authorization: String?)
 
     val requests = CopyOnWriteArrayList<Recorded>()
-    private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    private val serverSocket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
 
-    val url: String get() = "http://127.0.0.1:${server.address.port}"
+    val url: String get() = "http://127.0.0.1:${serverSocket.localPort}"
 
     init {
-        server.createContext("/") { exchange ->
-            val body = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
-            requests += Recorded(exchange.requestURI.path, body, exchange.requestHeaders.getFirst("Authorization"))
-            val bytes = responseBody.toByteArray(Charsets.UTF_8)
-            exchange.sendResponseHeaders(status, bytes.size.toLong())
-            exchange.responseBody.use { it.write(bytes) }
+        thread(isDaemon = true) {
+            while (!serverSocket.isClosed) {
+                try {
+                    serverSocket.accept().use { handle(it) }
+                } catch (e: Exception) {
+                    if (serverSocket.isClosed) break
+                }
+            }
         }
-        server.start()
     }
 
-    override fun close() = server.stop(0)
+    private fun handle(socket: Socket) {
+        val input = BufferedInputStream(socket.getInputStream())
+
+        fun readLine(): String {
+            val line = StringBuilder()
+            while (true) {
+                val c = input.read()
+                if (c < 0 || c == '\n'.code) break
+                if (c != '\r'.code) line.append(c.toChar())
+            }
+            return line.toString()
+        }
+
+        val path = readLine().split(" ").getOrNull(1) ?: ""
+        var contentLength = 0
+        var authorization: String? = null
+        while (true) {
+            val header = readLine()
+            if (header.isEmpty()) break
+            val colon = header.indexOf(':')
+            if (colon <= 0) continue
+            val value = header.substring(colon + 1).trim()
+            when (header.substring(0, colon).trim().lowercase()) {
+                "content-length" -> contentLength = value.toInt()
+                "authorization" -> authorization = value
+            }
+        }
+        val body = ByteArray(contentLength)
+        var read = 0
+        while (read < contentLength) {
+            val n = input.read(body, read, contentLength - read)
+            if (n < 0) break
+            read += n
+        }
+        requests += Recorded(path, String(body, 0, read, Charsets.UTF_8), authorization)
+
+        val payload = responseBody.toByteArray(Charsets.UTF_8)
+        val out = socket.getOutputStream()
+        out.write(
+            ("HTTP/1.1 $status Fake\r\nContent-Type: application/json\r\nContent-Length: ${payload.size}\r\n" +
+                "Connection: close\r\n\r\n").toByteArray(Charsets.UTF_8)
+        )
+        out.write(payload)
+        out.flush()
+    }
+
+    override fun close() {
+        serverSocket.close()
+    }
 
     companion object {
         const val ADVISORY_ALLOW =
