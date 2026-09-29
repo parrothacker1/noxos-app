@@ -23,6 +23,7 @@ import org.robolectric.annotation.Config
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.RandomAccessFile
+import java.nio.ByteBuffer
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -171,15 +172,85 @@ class TriggerRouterTest {
             val result = router.scanFile(realUri, "real.bin")
 
             assertTrue(result is ScanResult.Success)
-            val sent = transport.sentBytes!!
-            val header = sent.copyOfRange(0, 5)
-            val body = sent.copyOfRange(5, sent.size)
-            assertEquals(VmPayloadProtocol.TASK_FILE_SCAN, header[0])
-            assertArrayEquals(realFile.readBytes(), body)
+            val parsed = parseTask2Request(transport.sentBytes!!)
+            assertEquals("real.bin", parsed.name)
+            assertArrayEquals(realFile.readBytes(), parsed.fileBytes)
         } finally {
             realFile.delete()
         }
     }
+
+    @Test
+    fun testScanFileSendsTask2WithTheDeclaredNameOnTheBufferedPathToo() = runBlocking {
+        shadowOf(context.contentResolver).registerInputStream(
+            testUri,
+            ByteArrayInputStream("dummy_file_bytes".toByteArray(Charsets.UTF_8))
+        )
+        transport.bytesToReceive = response(0, JSONObject().put("file_type", "jpeg").put("Make", "Google").toString())
+
+        router.scanFile(testUri, "photo.jpg")
+
+        val parsed = parseTask2Request(transport.sentBytes!!)
+        assertEquals("photo.jpg", parsed.name)
+        assertArrayEquals("dummy_file_bytes".toByteArray(Charsets.UTF_8), parsed.fileBytes)
+        assertEquals(1, transport.sentPayloads.size)
+    }
+
+    @Test
+    fun testScanFileRetriesAsTask0WhenTheGuestDoesNotKnowTask2() = runBlocking {
+        val realFile = File.createTempFile("warden_fallback_test", ".bin")
+        try {
+            realFile.writeBytes("fallback file contents".toByteArray(Charsets.UTF_8))
+            transport.queueResponse(response(2, "{\"error\":\"unknown task type\"}"))
+            transport.queueResponse(response(0, JSONObject().put("file_type", "unknown").toString()))
+
+            val result = router.scanFile(Uri.fromFile(realFile), "old-guest.bin")
+
+            assertTrue(result is ScanResult.Success)
+            assertEquals(2, transport.sentPayloads.size)
+            assertEquals(VmPayloadProtocol.TASK_FILE_SCAN_WITH_META, transport.sentPayloads[0][0])
+            val retry = transport.sentPayloads[1]
+            assertEquals(VmPayloadProtocol.TASK_FILE_SCAN, retry[0])
+            assertEquals(realFile.length().toInt(), ByteBuffer.wrap(retry, 1, 4).int)
+            assertArrayEquals(realFile.readBytes(), retry.copyOfRange(5, retry.size))
+            assertEquals(AuditOutcome.SUCCESS, auditRepository.recordedEvents.single().outcome)
+        } finally {
+            realFile.delete()
+        }
+    }
+
+    @Test
+    fun testScanFileDoesNotRetryOnADifferentStatus2Error() = runBlocking {
+        val realFile = File.createTempFile("warden_nofallback_test", ".bin")
+        try {
+            realFile.writeBytes("contents".toByteArray(Charsets.UTF_8))
+            transport.queueResponse(response(2, "{\"error\":\"malformed file scan metadata\"}"))
+
+            val result = router.scanFile(Uri.fromFile(realFile), "x.bin")
+
+            assertTrue(result is ScanResult.Failure)
+            assertTrue((result as ScanResult.Failure).reason.contains("Malformed input"))
+            assertEquals(1, transport.sentPayloads.size)
+        } finally {
+            realFile.delete()
+        }
+    }
+
+    private class Task2Request(val name: String, val mime: String, val fileBytes: ByteArray)
+
+    private fun parseTask2Request(sent: ByteArray): Task2Request {
+        val buf = ByteBuffer.wrap(sent)
+        assertEquals(VmPayloadProtocol.TASK_FILE_SCAN_WITH_META, buf.get())
+        val declaredLength = buf.int
+        assertEquals(sent.size - 5, declaredLength)
+        val name = ByteArray(buf.short.toInt() and 0xFFFF).also { buf.get(it) }
+        val mime = ByteArray(buf.short.toInt() and 0xFFFF).also { buf.get(it) }
+        val file = ByteArray(buf.remaining()).also { buf.get(it) }
+        return Task2Request(String(name, Charsets.UTF_8), String(mime, Charsets.US_ASCII), file)
+    }
+
+    private fun response(status: Int, json: String): ByteArray =
+        byteArrayOf(status.toByte()) + json.toByteArray(Charsets.UTF_8)
 
     @Test
     fun testScanFileWithOnlyFileTypeInResponseIsSuccessNotQuarantinedWithADistinctSummary() = runBlocking {

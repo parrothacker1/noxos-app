@@ -65,81 +65,92 @@ class TriggerRouter(
             }
 
             val timeoutMillis = settingsRepository.vmSessionTimeoutSeconds.first() * 1000L
+            val mimeType = context.contentResolver.getType(fileUri) ?: ""
+            val metaPrefix = VmPayloadProtocol.encodeFileScanMeta(inputDescriptor, mimeType)
 
-            enter(ScanStep.BOOTING)
-            var stepStart = System.currentTimeMillis()
-
-            val scanResult = withTimeout(timeoutMillis) {
+            suspend fun attempt(useDeclaredMeta: Boolean): VmPayloadProtocol.Response = withTimeout(timeoutMillis) {
                 vmSessionFactory.createSession(context).use { session ->
+                    enter(ScanStep.BOOTING)
+                    var stepStart = System.currentTimeMillis()
+                    val transport = session.getTransport()
                     stepDurations[ScanStep.BOOTING] = System.currentTimeMillis() - stepStart
                     enter(ScanStep.EXECUTING)
                     stepStart = System.currentTimeMillis()
 
-                    val transport = session.getTransport()
+                    val taskType = if (useDeclaredMeta) VmPayloadProtocol.TASK_FILE_SCAN_WITH_META else VmPayloadProtocol.TASK_FILE_SCAN
+                    val prefix = if (useDeclaredMeta) metaPrefix else ByteArray(0)
                     if (knownLength != null) {
-                        val header = VmPayloadProtocol.encodeHeader(VmPayloadProtocol.TASK_FILE_SCAN, knownLength.toInt())
+                        val header = VmPayloadProtocol.encodeHeader(taskType, prefix.size + knownLength.toInt()) + prefix
                         val fileStream = context.contentResolver.openInputStream(fileUri)
                             ?: throw java.io.IOException("Could not open file for scanning")
                         fileStream.use { transport.sendStream(header, it, knownLength) }
                     } else {
-                        val requestPayload = VmPayloadProtocol.encodeRequest(VmPayloadProtocol.TASK_FILE_SCAN, bufferedBytes!!)
-                        transport.send(requestPayload)
+                        val header = VmPayloadProtocol.encodeHeader(taskType, prefix.size + bufferedBytes!!.size)
+                        transport.send(header + prefix + bufferedBytes)
                     }
                     val responsePayload = transport.receive()
 
                     stepDurations[ScanStep.EXECUTING] = System.currentTimeMillis() - stepStart
-                    enter(ScanStep.SANITIZING)
-                    stepStart = System.currentTimeMillis()
-
-                    val decoded = VmPayloadProtocol.decodeResponse(responsePayload)
-                    val result = when (decoded.status) {
-                        0 -> {
-                            val json = JSONObject(decoded.json)
-                            if (json.optBoolean("cheap_filter_flagged", false)) {
-                                val reason = json.optString("cheap_filter_reason", "flagged by in-VM pre-scan filter")
-                                outcome = AuditOutcome.FAILURE
-                                errorMessage = reason
-                                ScanResult.Failure(reason)
-                            } else {
-                                val metadata = mutableMapOf<String, String>()
-                                json.keys().forEach { key ->
-                                    if (key != "cheap_filter_flagged" && key != "cheap_filter_reason") {
-                                        metadata[key] = json.optString(key, "")
-                                    }
-                                }
-                                outcome = AuditOutcome.SUCCESS
-                                resultSummary = if (metadata.keys == setOf("file_type")) {
-                                    "Unrecognized file type (${metadata["file_type"]}) — not analyzed, not flagged"
-                                } else {
-                                    "Scan completed, no issues found"
-                                }
-                                ScanResult.Success(ExifData(metadata))
-                            }
-                        }
-                        1 -> {
-                            outcome = AuditOutcome.FAILURE
-                            errorMessage = decoded.json
-                            ScanResult.Failure("Parse error: ${decoded.json}")
-                        }
-                        2 -> {
-                            outcome = AuditOutcome.FAILURE
-                            errorMessage = decoded.json
-                            ScanResult.Failure("Malformed input: ${decoded.json}")
-                        }
-                        else -> {
-                            outcome = AuditOutcome.ERROR
-                            errorMessage = "Unknown protocol status: ${decoded.status}"
-                            ScanResult.Error(errorMessage!!)
-                        }
-                    }
-
-                    stepDurations[ScanStep.SANITIZING] = System.currentTimeMillis() - stepStart
-                    enter(ScanStep.DESTROYING)
-                    stepStart = System.currentTimeMillis()
-                    result
+                    VmPayloadProtocol.decodeResponse(responsePayload)
                 }
             }
-            stepDurations[ScanStep.DESTROYING] = System.currentTimeMillis() - stepStart
+
+            val scanResult = run {
+                var decoded = attempt(useDeclaredMeta = true)
+                if (VmPayloadProtocol.isUnknownTaskTypeError(decoded.status, decoded.json)) {
+                    // Deployed guest predates task-2 support (noxos-payload < v1.0.4) - retry the
+                    // same file as a plain task-0 scan rather than failing a perfectly good file.
+                    decoded = attempt(useDeclaredMeta = false)
+                }
+
+                enter(ScanStep.SANITIZING)
+                var stepStart = System.currentTimeMillis()
+
+                val result = when (decoded.status) {
+                    0 -> {
+                        val json = JSONObject(decoded.json)
+                        if (json.optBoolean("cheap_filter_flagged", false)) {
+                            val reason = json.optString("cheap_filter_reason", "flagged by in-VM pre-scan filter")
+                            outcome = AuditOutcome.FAILURE
+                            errorMessage = reason
+                            ScanResult.Failure(reason)
+                        } else {
+                            val metadata = mutableMapOf<String, String>()
+                            json.keys().forEach { key ->
+                                if (key != "cheap_filter_flagged" && key != "cheap_filter_reason") {
+                                    metadata[key] = json.optString(key, "")
+                                }
+                            }
+                            outcome = AuditOutcome.SUCCESS
+                            resultSummary = if (metadata.keys == setOf("file_type")) {
+                                "Unrecognized file type (${metadata["file_type"]}) — not analyzed, not flagged"
+                            } else {
+                                "Scan completed, no issues found"
+                            }
+                            ScanResult.Success(ExifData(metadata))
+                        }
+                    }
+                    1 -> {
+                        outcome = AuditOutcome.FAILURE
+                        errorMessage = decoded.json
+                        ScanResult.Failure("Parse error: ${decoded.json}")
+                    }
+                    2 -> {
+                        outcome = AuditOutcome.FAILURE
+                        errorMessage = decoded.json
+                        ScanResult.Failure("Malformed input: ${decoded.json}")
+                    }
+                    else -> {
+                        outcome = AuditOutcome.ERROR
+                        errorMessage = "Unknown protocol status: ${decoded.status}"
+                        ScanResult.Error(errorMessage!!)
+                    }
+                }
+
+                stepDurations[ScanStep.SANITIZING] = System.currentTimeMillis() - stepStart
+                enter(ScanStep.DESTROYING)
+                result
+            }
             return scanResult
         } catch (e: TimeoutCancellationException) {
             outcome = AuditOutcome.ERROR
