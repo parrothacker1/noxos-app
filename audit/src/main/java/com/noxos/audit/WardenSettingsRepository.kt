@@ -26,6 +26,13 @@ class WardenSettingsRepository(private val context: Context) {
         val INFERENCE_ENDPOINT_URL = stringPreferencesKey("inference_endpoint_url")
         val INFERENCE_API_KEY = stringPreferencesKey("inference_api_key")
         val QUARANTINE_RETENTION_DAYS = intPreferencesKey("quarantine_retention_days")
+        val FEATURE_LOG_ENABLED = booleanPreferencesKey("feature_log_enabled")
+    }
+
+    val featureLogEnabled: Flow<Boolean> = context.wardenDataStore.data.map { it[Keys.FEATURE_LOG_ENABLED] ?: false }
+
+    suspend fun setFeatureLogEnabled(enabled: Boolean) {
+        context.wardenDataStore.edit { it[Keys.FEATURE_LOG_ENABLED] = enabled }
     }
 
     val themeMode: Flow<ThemeMode> = context.wardenDataStore.data.map { prefs ->

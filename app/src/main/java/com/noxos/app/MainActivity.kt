@@ -25,6 +25,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.noxos.audit.*
 import com.noxos.audit.theme.WardenTheme
+import com.noxos.netmonitor.FeatureLog
 import com.noxos.netmonitor.NetMonitor
 import com.noxos.triggerrouter.FileArrivalWatcher
 import com.noxos.triggerrouter.QuarantineManager
@@ -36,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed class Screen {
     object Home : Screen()
@@ -151,6 +153,24 @@ class MainActivity : ComponentActivity() {
             ) { uri ->
                 if (uri != null) {
                     coroutineScope.launch(Dispatchers.IO) { AuditExport.write(applicationContext, uri, pendingExportJson) }
+                }
+            }
+
+            val featureLog = remember { FeatureLog.get(applicationContext) }
+            val featureLogEnabled by settingsRepository.featureLogEnabled.collectAsState(initial = false)
+            var featureLogRecordCount by remember { mutableIntStateOf(0) }
+            LaunchedEffect(currentScreen) {
+                if (currentScreen is Screen.Settings) {
+                    featureLogRecordCount = withContext(Dispatchers.IO) { featureLog.count() }
+                }
+            }
+            val featureLogExportLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.CreateDocument("application/x-ndjson")
+            ) { uri ->
+                if (uri != null) {
+                    coroutineScope.launch(Dispatchers.IO) {
+                        contentResolver.openOutputStream(uri)?.use { featureLog.copyTo(it) }
+                    }
                 }
             }
 
@@ -327,6 +347,18 @@ class MainActivity : ComponentActivity() {
                             onExportAuditLog = {
                                 pendingExportJson = AuditExport.toJson(events)
                                 exportLauncher.launch("warden-audit-log.json")
+                            },
+                            featureLogEnabled = featureLogEnabled,
+                            onFeatureLogEnabledChange = { enabled ->
+                                coroutineScope.launch { settingsRepository.setFeatureLogEnabled(enabled) }
+                            },
+                            featureLogRecordCount = featureLogRecordCount,
+                            onExportFeatureLog = { featureLogExportLauncher.launch("warden-feature-log.jsonl") },
+                            onClearFeatureLog = {
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    featureLog.clear()
+                                    featureLogRecordCount = 0
+                                }
                             },
                             versionLabel = versionLabel,
                             onBack = { currentScreen = Screen.Home }

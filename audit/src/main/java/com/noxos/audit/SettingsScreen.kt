@@ -51,6 +51,11 @@ fun SettingsScreen(
     quarantineRetentionDays: Int,
     onQuarantineRetentionDaysSelected: (Int) -> Unit,
     onExportAuditLog: () -> Unit,
+    featureLogEnabled: Boolean,
+    onFeatureLogEnabledChange: (Boolean) -> Unit,
+    featureLogRecordCount: Int,
+    onExportFeatureLog: () -> Unit,
+    onClearFeatureLog: () -> Unit,
     versionLabel: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -142,6 +147,18 @@ fun SettingsScreen(
                     onSelect = onQuarantineRetentionDaysSelected
                 )
                 SettingsRow("Export audit log", "", onClick = onExportAuditLog)
+            }
+
+            SettingsSection("Training data (optional)") {
+                SettingsSwitchRow("Log connection statistics on this device", featureLogEnabled, onCheckedChange = onFeatureLogEnabledChange)
+                Text(
+                    "Stores only numbers (ports, byte and packet counts, timing, connection state) so a detection model can learn what normal traffic looks like. " +
+                        "No addresses, websites, apps or content are recorded, and nothing is ever sent anywhere: you decide whether to export the file and share it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                SettingsRow("Export feature log", "$featureLogRecordCount records", onClick = onExportFeatureLog)
+                SettingsRow("Clear feature log", "", onClick = onClearFeatureLog)
             }
 
             Column(

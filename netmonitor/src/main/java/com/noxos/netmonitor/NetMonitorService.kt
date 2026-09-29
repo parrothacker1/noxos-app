@@ -161,8 +161,10 @@ class NetMonitorService : VpnService() {
 
         aclJob = aclRepository?.let { acl ->
             serviceScope.launch {
+                val featureLog = FeatureLog.get(applicationContext)
                 acl.observeKind(AclKind.NETWORK).collect { list ->
                     aclCache = list.associate { it.subject to it.state }
+                    list.forEach { if (it.state == AclState.BLOCKED) featureLog.markLaterBlocked(it.subject) }
                 }
             }
         }
@@ -173,7 +175,7 @@ class NetMonitorService : VpnService() {
             serviceScope.launch { AnalysisDispatcher(applicationContext, acl, settings).run() }
         } else null
         autoencoderDispatchJob = acl?.let {
-            serviceScope.launch { AutoencoderDispatcher(applicationContext, it).run() }
+            serviceScope.launch { AutoencoderDispatcher(applicationContext, it, settings).run() }
         }
 
         captureJob = serviceScope.launch {

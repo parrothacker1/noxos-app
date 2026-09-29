@@ -9,12 +9,20 @@ import com.noxos.triggerrouter.BuildConfig
 import com.noxos.triggerrouter.classifier.AutoencoderVerdict
 import com.noxos.triggerrouter.classifier.ModelUpdateManager
 import com.noxos.triggerrouter.classifier.OnDeviceAutoencoder
+import com.noxos.audit.WardenSettingsRepository
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 class AutoencoderDispatcher(
     context: Context,
-    private val aclRepository: AclRepository
+    private val aclRepository: AclRepository,
+    private val settings: WardenSettingsRepository? = null
 ) {
+    private val featureLog = FeatureLog.get(context)
+    private val loggedThisRun = HashSet<String>()
+
+    private class Snapshot(val flow: AclEntry, val state: String?, val ageMillis: Long)
+
     private val modelUpdateManager = ModelUpdateManager(
         context,
         manifestUrl = BuildConfig.AUTOENCODER_MANIFEST_URL,
@@ -23,9 +31,13 @@ class AutoencoderDispatcher(
 
     suspend fun run() {
         while (true) {
+            val loggingEnabled = settings?.featureLogEnabled?.first() ?: false
             aclRepository.nextAutoencoderBatch(BATCH_SIZE).forEach { entry ->
                 val stats = NetMonitorService.connectionStats[entry.subject]
-                val verdict = evaluate(entry, stats) ?: run {
+                val snapshot = stats?.let { snapshotOf(entry, it, System.currentTimeMillis()) }
+                if (loggingEnabled && snapshot != null) logSnapshot(entry.subject, snapshot)
+
+                val verdict = evaluate(entry, snapshot) ?: run {
                     Log.w(TAG, "no autoencoder verdict available, leaving ${entry.subject} pending")
                     return@forEach
                 }
@@ -53,7 +65,25 @@ class AutoencoderDispatcher(
         }
     }
 
-    private fun evaluate(entry: AclEntry, stats: ConnectionStats?): AutoencoderVerdict? {
+    private fun snapshotOf(entry: AclEntry, stats: ConnectionStats, now: Long): Snapshot {
+        val age = now - stats.firstSeenAtEpochMillis
+        return Snapshot(
+            flow = entry.withLiveStats(stats, now),
+            state = deriveConnectionState(entry.protocol, stats.tcpLifecycle, stats.dstPacketCount.get(), age),
+            ageMillis = age
+        )
+    }
+
+    // The snapshot is the very object the model is scored on, so the log holds exactly what it saw.
+    private fun logSnapshot(subject: String, snapshot: Snapshot) {
+        val state = snapshot.state ?: return
+        if (subject in loggedThisRun) return
+        val record = buildFeatureLogRecord(snapshot.flow, state, snapshot.ageMillis) ?: return
+        featureLog.append(subject, record)
+        loggedThisRun.add(subject)
+    }
+
+    private fun evaluate(entry: AclEntry, snapshot: Snapshot?): AutoencoderVerdict? {
         val modelJson = modelUpdateManager.loadCurrentModelJson() ?: return null
         return try {
             val autoencoder = OnDeviceAutoencoder(modelJson)
@@ -64,18 +94,12 @@ class AutoencoderDispatcher(
                 return null
             }
 
-            val now = System.currentTimeMillis()
-            val flow = if (stats != null) entry.withLiveStats(stats, now) else entry
             val categorical = mutableMapOf<String, String?>("proto" to entry.protocol)
             if ("state" in autoencoder.categoricalFeatureNames) {
-                // Without live stats (e.g. the process restarted) the state can't be derived; don't guess.
-                val liveStats = stats ?: return null
-                categorical["state"] = deriveConnectionState(
-                    entry.protocol, liveStats.tcpLifecycle,
-                    liveStats.dstPacketCount.get(), now - liveStats.firstSeenAtEpochMillis
-                ) ?: return null
+                // Without live stats (e.g. the process restarted) or a decided state, don't guess.
+                categorical["state"] = snapshot?.state ?: return null
             }
-            autoencoder.evaluate(networkFlowFeatures(flow) { null }, categorical)
+            autoencoder.evaluate(networkFlowFeatures(snapshot?.flow ?: entry) { null }, categorical)
         } catch (e: Exception) {
             Log.w(TAG, "autoencoder evaluation failed for ${entry.subject}", e)
             null
@@ -85,6 +109,6 @@ class AutoencoderDispatcher(
     companion object {
         private const val TAG = "WardenAutoencoderDispatcher"
         private const val POLL_INTERVAL_MS = 30_000L
-        private const val BATCH_SIZE = 5
+        private const val BATCH_SIZE = 50
     }
 }
