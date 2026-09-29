@@ -2,6 +2,13 @@ package com.noxos.netmonitor
 
 import com.noxos.audit.AclEntry
 
+internal val CAPTURED_NUMERIC_FEATURES = setOf(
+    "dst_port", "src_byte_count", "src_packet_count", "dst_byte_count", "dst_packet_count",
+    "duration_millis", "handshake_latency_millis", "smean", "dmean"
+)
+
+internal val CAPTURED_CATEGORICAL_FEATURES = setOf("proto")
+
 internal fun networkFlowFeatures(entry: AclEntry, encodeProto: (String) -> Float?): Map<String, Float> {
     val features = mutableMapOf<String, Float>()
     entry.destPort?.let { features["dst_port"] = it.toFloat() }

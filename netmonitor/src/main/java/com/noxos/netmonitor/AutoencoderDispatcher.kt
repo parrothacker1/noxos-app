@@ -35,7 +35,7 @@ class AutoencoderDispatcher(
                 }
 
                 val verdict = evaluate(entry) ?: run {
-                    Log.w(TAG, "no autoencoder model loaded yet, leaving ${entry.subject} pending")
+                    Log.w(TAG, "no autoencoder verdict available, leaving ${entry.subject} pending")
                     return@forEach
                 }
 
@@ -56,8 +56,14 @@ class AutoencoderDispatcher(
         val modelJson = modelUpdateManager.loadCurrentModelJson() ?: return null
         return try {
             val autoencoder = OnDeviceAutoencoder(modelJson)
+            val uncaptured = (autoencoder.numericFeatureNames - CAPTURED_NUMERIC_FEATURES) +
+                (autoencoder.categoricalFeatureNames - CAPTURED_CATEGORICAL_FEATURES)
+            if (uncaptured.isNotEmpty()) {
+                Log.w(TAG, "model needs inputs Warden doesn't capture yet $uncaptured, leaving ${entry.subject} pending")
+                return null
+            }
             val features = networkFlowFeatures(entry) { null }
-            autoencoder.evaluate(features, entry.protocol)
+            autoencoder.evaluate(features, mapOf("proto" to entry.protocol))
         } catch (e: Exception) {
             Log.w(TAG, "autoencoder evaluation failed for ${entry.subject}", e)
             null
