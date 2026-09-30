@@ -31,6 +31,9 @@ class AutoencoderDispatcher(
 
     suspend fun run() {
         while (true) {
+            // Nothing else downloads this model: fetch it as soon as it is missing, then refresh daily.
+            if (modelUpdateManager.hasLocalModel()) modelUpdateManager.checkForUpdateIfStale() else modelUpdateManager.ensureModelLoaded()
+
             val loggingEnabled = settings?.featureLogEnabled?.first() ?: false
             aclRepository.nextAutoencoderBatch(BATCH_SIZE).forEach { entry ->
                 val stats = NetMonitorService.connectionStats[entry.subject]
@@ -94,12 +97,14 @@ class AutoencoderDispatcher(
                 return null
             }
 
+            // Without live stats (e.g. the process restarted) the persisted row can't be trusted as the
+            // model's input, so don't score it.
+            val live = snapshot ?: return null
             val categorical = mutableMapOf<String, String?>("proto" to entry.protocol)
             if ("state" in autoencoder.categoricalFeatureNames) {
-                // Without live stats (e.g. the process restarted) or a decided state, don't guess.
-                categorical["state"] = snapshot?.state ?: return null
+                categorical["state"] = live.state ?: return null
             }
-            autoencoder.evaluate(networkFlowFeatures(snapshot?.flow ?: entry) { null }, categorical)
+            autoencoder.evaluate(networkFlowFeatures(live.flow) { null }, categorical)
         } catch (e: Exception) {
             Log.w(TAG, "autoencoder evaluation failed for ${entry.subject}", e)
             null

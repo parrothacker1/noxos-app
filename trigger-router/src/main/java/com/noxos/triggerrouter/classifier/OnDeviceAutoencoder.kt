@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.sqrt
 import kotlin.math.tanh
 
 data class AutoencoderVerdict(val anomalous: Boolean, val reconstructionError: Float)
@@ -11,11 +12,13 @@ data class AutoencoderVerdict(val anomalous: Boolean, val reconstructionError: F
 class OnDeviceAutoencoder(modelJson: String) {
     val numericFeatureNames: List<String>
     val categoricalFeatureNames: List<String>
+    private val numericTransforms: List<String>
     private val categories: List<List<String>>
+    private val protoFeatureIndex: Int
     private val numericMean: FloatArray
     private val numericStd: FloatArray
     private val sumNumericErrors: Boolean
-    private val reconstructionThreshold: Float
+    private val thresholdsByProto: Map<String, Float>
     private val leakySlope: Float
     private val encoderLayers: List<Layer>
     private val decoderTrunkLayers: List<Layer>
@@ -30,6 +33,13 @@ class OnDeviceAutoencoder(modelJson: String) {
         numericMean = root.getJSONArray("numeric_mean").toFloatArray()
         numericStd = root.getJSONArray("numeric_std").toFloatArray()
 
+        val transforms = root.getJSONObject("numeric_transforms")
+        numericTransforms = numericFeatureNames.map { name ->
+            val transform = transforms.optString(name)
+            require(transform in SUPPORTED_TRANSFORMS) { "unsupported or missing numeric transform for $name: '$transform'" }
+            transform
+        }
+
         val reduction = root.getString("numeric_reduction")
         require(reduction == "mean" || reduction == "sum") { "unsupported numeric_reduction: $reduction" }
         sumNumericErrors = reduction == "sum"
@@ -37,8 +47,12 @@ class OnDeviceAutoencoder(modelJson: String) {
         val categoricalArr = root.getJSONArray("categorical_features")
         categoricalFeatureNames = (0 until categoricalArr.length()).map { categoricalArr.getJSONObject(it).getString("name") }
         categories = (0 until categoricalArr.length()).map { categoricalArr.getJSONObject(it).getJSONArray("categories").toStringList() }
+        protoFeatureIndex = categoricalFeatureNames.indexOf("proto")
+        require(protoFeatureIndex >= 0) { "model has no proto categorical feature to select a threshold by" }
 
-        reconstructionThreshold = root.getDouble("reconstruction_threshold").toFloat()
+        val thresholds = root.getJSONObject("reconstruction_thresholds")
+        thresholdsByProto = thresholds.keys().asSequence().associate { it.lowercase() to thresholds.getDouble(it).toFloat() }
+
         leakySlope = root.optDouble("leaky_relu_negative_slope", 0.01).toFloat()
         encoderLayers = root.getJSONArray("encoder").toLayerList()
         decoderTrunkLayers = root.getJSONArray("decoder_trunk").toLayerList()
@@ -55,28 +69,30 @@ class OnDeviceAutoencoder(modelJson: String) {
     }
 
     /**
-     * [numericValues] is keyed by raw (untransformed) names in [numericFeatureNames]; an absent one is
-     * treated as raw 0, matching how training fills flows that lack it. "dst_port" is log1p-transformed
-     * before standardization, matching noxos-inference's encoding.py. [categoricalValues] is keyed by
-     * [categoricalFeatureNames]; a value is matched case-insensitively against that feature's categories
-     * and falls back to the last one ("other") when unknown or absent.
-     * Error = numeric squared errors (reduced per the model's numeric_reduction) + the sum of each
-     * categorical head's cross-entropy, unweighted.
+     * [numericValues] is keyed by raw (untransformed) names in [numericFeatureNames]; an absent one is raw 0.
+     * Each raw value is clamped at 0, transformed as the model file says (log1p or sqrt), then standardized.
+     * [categoricalValues] is keyed by [categoricalFeatureNames]; a value is matched case-insensitively and
+     * falls back to the last category ("other") when unknown or absent.
+     * Error = numeric squared errors (reduced per numeric_reduction) + the sum of each categorical head's
+     * cross-entropy, unweighted. The flag threshold is chosen by protocol; a protocol with no threshold
+     * (anything but the ones the model was calibrated on) is not scored, and this returns null (fail-open).
      */
-    fun evaluate(numericValues: Map<String, Float>, categoricalValues: Map<String, String?>): AutoencoderVerdict {
+    fun evaluate(numericValues: Map<String, Float>, categoricalValues: Map<String, String?>): AutoencoderVerdict? {
+        val trueIndexes = categoricalFeatureNames.mapIndexed { f, name ->
+            val values = categories[f]
+            val found = values.indexOfFirst { it.equals(categoricalValues[name], ignoreCase = true) }
+            if (found >= 0) found else values.size - 1
+        }
+        val protoName = categories[protoFeatureIndex][trueIndexes[protoFeatureIndex]].lowercase()
+        val threshold = thresholdsByProto[protoName] ?: return null
+
         val standardizedNumeric = FloatArray(numericFeatureNames.size) { i ->
-            val name = numericFeatureNames[i]
-            val raw = numericValues[name] ?: 0f
-            val transformed = if (name == "dst_port") ln(1.0 + raw).toFloat() else raw
+            val raw = maxOf(numericValues[numericFeatureNames[i]] ?: 0f, 0f)
+            val transformed = if (numericTransforms[i] == "log1p") ln(1.0 + raw).toFloat() else sqrt(raw)
             val std = numericStd[i]
             if (std == 0f) transformed - numericMean[i] else (transformed - numericMean[i]) / std
         }
 
-        val trueIndexes = categoricalFeatureNames.mapIndexed { f, name ->
-            val values = categories[f]
-            val found = values.indexOfFirst { it.equals(categoricalValues[name], ignoreCase = true) }
-            if (found >= 0 && found != values.size - 1) found else values.size - 1
-        }
         var input = standardizedNumeric
         categories.forEachIndexed { f, values ->
             input += FloatArray(values.size).also { it[trueIndexes[f]] = 1f }
@@ -90,7 +106,7 @@ class OnDeviceAutoencoder(modelJson: String) {
             error += crossEntropy(head.forward(trunkOutput), trueIndexes[f])
         }
 
-        return AutoencoderVerdict(anomalous = error > reconstructionThreshold, reconstructionError = error)
+        return AutoencoderVerdict(anomalous = error > threshold, reconstructionError = error)
     }
 
     private fun squaredErrorReduction(original: FloatArray, reconstructed: FloatArray): Float {
@@ -125,7 +141,7 @@ class OnDeviceAutoencoder(modelJson: String) {
     private fun Layer.applyActivation(x: Float): Float = when (activation) {
         "linear" -> x
         "relu" -> if (x > 0f) x else 0f
-        "leaky_relu" -> if (x > 0f) x else leakySlope * x
+        "leaky_relu" -> if (x >= 0f) x else leakySlope * x
         "sigmoid" -> (1.0 / (1.0 + exp(-x.toDouble()))).toFloat()
         "tanh" -> tanh(x)
         else -> throw IllegalArgumentException("unsupported activation: $activation")
@@ -148,5 +164,6 @@ class OnDeviceAutoencoder(modelJson: String) {
 
     private companion object {
         val SUPPORTED_ACTIVATIONS = setOf("linear", "relu", "leaky_relu", "sigmoid", "tanh")
+        val SUPPORTED_TRANSFORMS = setOf("log1p", "sqrt")
     }
 }

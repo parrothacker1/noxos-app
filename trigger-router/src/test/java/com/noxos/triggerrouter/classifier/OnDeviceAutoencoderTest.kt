@@ -2,6 +2,8 @@ package com.noxos.triggerrouter.classifier
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,147 +11,138 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-// Two layers of checking: (1) tiny synthetic models with hand-verified numbers that isolate one
-// mechanism each (two categorical heads summed, mean vs sum reduction, dst_port log1p, missing
-// values, leaky_relu slope, rejecting unknown contracts); (2) the real released noxos-inference
-// model (autoencoder-latest, version 1790704070) run on realistic rows, with expected errors from an
-// independent float64 numpy forward pass over the same model.json - so a wrong wiring of the real
-// 24-wide input/two-head structure is caught, not just this file agreeing with itself.
+// Two layers of checking: (1) tiny synthetic models with hand-verified numbers that each isolate one mechanism
+// (per-protocol thresholds, log1p/sqrt transforms and clamping, mean vs sum, leaky slope, contract rejection);
+// (2) the real released noxos-inference model (autoencoder-latest, version 1790722998, the MIRAGE-trained first
+// gate) on the three golden vectors from ML-AUTOENCODER-CONTRACT.md (tolerance 1e-4) plus extra rows whose
+// expected errors come from an independent float64 numpy forward pass over the same model.json.
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class OnDeviceAutoencoderTest {
 
-    // 2 numeric + proto(3) + state(3) = 8 inputs. The encoder copies the two numerics into a 2-wide
-    // bottleneck, trunk and numeric head are identity (numeric error 0), and both categorical heads
-    // ignore the trunk (zero weight) and emit fixed logits, so error = CE(proto) + CE(state) only.
-    private val twoHeadModelJson = """
-        {
-          "numeric_features": ["dst_port", "src_byte_count"],
-          "numeric_mean": [0.0, 0.0],
-          "numeric_std": [1.0, 1.0],
-          "numeric_reduction": "mean",
-          "categorical_features": [
-            { "name": "proto", "categories": ["tcp", "udp", "other"] },
-            { "name": "state", "categories": ["FIN", "INT", "other"] }
-          ],
-          "reconstruction_threshold": 2.0,
-          "encoder": [
-            { "weight": [[1,0,0,0,0,0,0,0], [0,1,0,0,0,0,0,0]], "bias": [0.0, 0.0], "activation": "linear" }
-          ],
-          "decoder_trunk": [
-            { "weight": [[1,0], [0,1]], "bias": [0.0, 0.0], "activation": "linear" }
-          ],
-          "decoder_numeric_head": { "weight": [[1,0], [0,1]], "bias": [0.0, 0.0], "activation": "linear" },
-          "decoder_categorical_heads": [
-            { "name": "proto", "weight": [[0,0], [0,0], [0,0]], "bias": [2.0, 1.0, -1.0], "activation": "linear" },
-            { "name": "state", "weight": [[0,0], [0,0], [0,0]], "bias": [0.5, -0.5, 1.5], "activation": "linear" }
-          ],
-          "leaky_relu_negative_slope": 0.01
-        }
-    """.trimIndent()
-    private val twoHeadModel = OnDeviceAutoencoder(twoHeadModelJson)
-
-    // dst_port = e - 1 -> log1p = 1.0, so with mean 0 / std 1 the standardized numerics are [1.0, 2.0].
-    private val numerics = mapOf("dst_port" to (Math.E - 1).toFloat(), "src_byte_count" to 2f)
-
-    @Test
-    fun `both categorical heads' cross-entropies are summed into the error`() {
-        // proto tcp: 0.34901221676818617, state INT: 2.4076059644443806 -> 2.7566181812125667
-        val verdict = twoHeadModel.evaluate(numerics, mapOf("proto" to "tcp", "state" to "INT"))
-
-        assertEquals(2.7566182f, verdict.reconstructionError, 1e-4f)
-        assertTrue(verdict.anomalous)
-    }
-
-    @Test
-    fun `an error under the model's threshold is normal`() {
-        // proto udp: 1.3490122167681862, state other (via unknown value): 0.40760596444438035 -> 1.7566181812125665
-        val verdict = twoHeadModel.evaluate(numerics, mapOf("proto" to "udp", "state" to "SYN-SENT"))
-
-        assertEquals(1.7566182f, verdict.reconstructionError, 1e-4f)
-        assertFalse(verdict.anomalous)
-    }
-
-    @Test
-    fun `a missing categorical value buckets to other and matching ignores case`() {
-        val absent = twoHeadModel.evaluate(numerics, emptyMap())
-        val explicitOther = twoHeadModel.evaluate(numerics, mapOf("proto" to "other", "state" to "other"))
-        val mixedCase = twoHeadModel.evaluate(numerics, mapOf("proto" to "TCP", "state" to "int"))
-
-        assertEquals(explicitOther.reconstructionError, absent.reconstructionError, 0f)
-        assertEquals(2.7566182f, mixedCase.reconstructionError, 1e-4f)
-    }
-
-    private fun forcedZeroNumericHeadModel(reduction: String) = """
+    private fun model(
+        transforms: String = """{"dst_port": "log1p", "src_byte_count": "sqrt"}""",
+        reduction: String = "mean",
+        thresholds: String = """{"tcp": 1.0, "udp": 1.0}""",
+        numericHead: String = """{ "weight": [[1,0], [0,1]], "bias": [0.0, 0.0], "activation": "linear" }""",
+        protoBias: String = "[2.0, 1.0, -1.0]"
+    ) = """
         {
           "numeric_features": ["dst_port", "src_byte_count"],
           "numeric_mean": [0.0, 0.0],
           "numeric_std": [1.0, 1.0],
           "numeric_reduction": "$reduction",
-          "categorical_features": [
-            { "name": "proto", "categories": ["tcp", "udp", "other"] },
-            { "name": "state", "categories": ["FIN", "INT", "other"] }
-          ],
-          "reconstruction_threshold": 100.0,
+          "numeric_transforms": $transforms,
+          "categorical_features": [ { "name": "proto", "categories": ["tcp", "udp", "other"] } ],
+          "reconstruction_thresholds": $thresholds,
           "encoder": [
-            { "weight": [[1,0,0,0,0,0,0,0], [0,1,0,0,0,0,0,0]], "bias": [0.0, 0.0], "activation": "linear" }
+            { "weight": [[1,0,0,0,0], [0,1,0,0,0]], "bias": [0.0, 0.0], "activation": "linear" }
           ],
           "decoder_trunk": [
             { "weight": [[1,0], [0,1]], "bias": [0.0, 0.0], "activation": "linear" }
           ],
-          "decoder_numeric_head": { "weight": [[0,0], [0,0]], "bias": [0.0, 0.0], "activation": "linear" },
+          "decoder_numeric_head": $numericHead,
           "decoder_categorical_heads": [
-            { "name": "proto", "weight": [[0,0], [0,0], [0,0]], "bias": [0.0, 0.0, 0.0], "activation": "linear" },
-            { "name": "state", "weight": [[0,0], [0,0], [0,0]], "bias": [0.0, 0.0, 0.0], "activation": "linear" }
-          ]
+            { "name": "proto", "weight": [[0,0], [0,0], [0,0]], "bias": $protoBias, "activation": "linear" }
+          ],
+          "leaky_relu_negative_slope": 0.01
         }
     """.trimIndent()
 
+    // dst_port = e - 1 -> log1p = 1.0; src_byte_count = 4 -> sqrt = 2.0; with mean 0 / std 1 the z-scores are [1, 2].
+    private val numerics = mapOf("dst_port" to (Math.E - 1).toFloat(), "src_byte_count" to 4f)
+
+    private val zeroNumericHead = """{ "weight": [[0,0], [0,0]], "bias": [0.0, 0.0], "activation": "linear" }"""
+    private val uniformProto = "[0.0, 0.0, 0.0]"
+
     @Test
-    fun `mean reduction averages the numeric squared errors while sum reduction adds them`() {
-        // standardized numerics [1, 2] vs a forced-zero reconstruction: squared errors 1 and 4.
-        // Both uniform categorical heads contribute ln(3) each = 2.1972245773362196.
-        val categorical = mapOf("proto" to "tcp", "state" to "FIN")
+    fun `the flag threshold is chosen by protocol, so each protocol is judged against its own`() {
+        // numeric head is identity (numeric error 0), proto head fixed logits [2,1,-1]:
+        // CE(tcp) = 0.34901221676818617, CE(udp) = 1.3490122167681862.
+        val autoencoder = OnDeviceAutoencoder(model(thresholds = """{"tcp": 0.3, "udp": 5.0}"""))
 
-        val mean = OnDeviceAutoencoder(forcedZeroNumericHeadModel("mean")).evaluate(numerics, categorical)
-        val sum = OnDeviceAutoencoder(forcedZeroNumericHeadModel("sum")).evaluate(numerics, categorical)
+        val tcp = autoencoder.evaluate(numerics, mapOf("proto" to "tcp"))!!
+        val udp = autoencoder.evaluate(numerics, mapOf("proto" to "udp"))!!
 
-        assertEquals(4.6972246f, mean.reconstructionError, 1e-4f)
-        assertEquals(7.1972246f, sum.reconstructionError, 1e-4f)
+        assertEquals(0.34901222f, tcp.reconstructionError, 1e-4f)
+        assertTrue("0.349 > tcp threshold 0.3", tcp.anomalous)
+        assertEquals(1.3490122f, udp.reconstructionError, 1e-4f)
+        assertFalse("1.349 < udp threshold 5.0 (would flip if tcp's threshold were used)", udp.anomalous)
     }
 
     @Test
-    fun `dst_port is log1p-transformed before standardization`() {
-        // Same forced-zero model, mean-reduced. Skipping log1p would standardize dst_port to ~1.718
-        // instead of 1.0 and change the numeric term from 2.5 to (1.718^2 + 4)/2 = 3.476.
-        val verdict = OnDeviceAutoencoder(forcedZeroNumericHeadModel("mean"))
-            .evaluate(numerics, mapOf("proto" to "tcp", "state" to "FIN"))
+    fun `a protocol the model has no threshold for is not scored at all`() {
+        val autoencoder = OnDeviceAutoencoder(model())
 
-        assertEquals(2.5f + 2.1972246f, verdict.reconstructionError, 1e-4f)
+        assertNull(autoencoder.evaluate(numerics, mapOf("proto" to "icmp")))
+        assertNull(autoencoder.evaluate(numerics, mapOf("proto" to "other")))
+        assertNull(autoencoder.evaluate(numerics, emptyMap()))
+    }
+
+    @Test
+    fun `protocol matching ignores case`() {
+        val autoencoder = OnDeviceAutoencoder(model())
+
+        assertEquals(
+            autoencoder.evaluate(numerics, mapOf("proto" to "tcp"))!!.reconstructionError,
+            autoencoder.evaluate(numerics, mapOf("proto" to "TCP"))!!.reconstructionError,
+            0f
+        )
+    }
+
+    @Test
+    fun `dst_port uses log1p and the other features use sqrt, both from the model file`() {
+        // forced-zero numeric reconstruction: MSE = mean(1^2, 2^2) = 2.5; uniform proto head: CE = ln(3) = 1.0986122886681098
+        val verdict = OnDeviceAutoencoder(model(numericHead = zeroNumericHead, protoBias = uniformProto))
+            .evaluate(numerics, mapOf("proto" to "tcp"))!!
+
+        assertEquals(3.5986123f, verdict.reconstructionError, 1e-4f)
+    }
+
+    @Test
+    fun `a raw value is clamped at zero before its transform instead of producing NaN`() {
+        // src_byte_count -9 -> clamped to 0 -> sqrt 0 -> z = [1, 0]: MSE = 0.5, plus ln(3) = 1.5986122886681098
+        val verdict = OnDeviceAutoencoder(model(numericHead = zeroNumericHead, protoBias = uniformProto))
+            .evaluate(mapOf("dst_port" to (Math.E - 1).toFloat(), "src_byte_count" to -9f), mapOf("proto" to "tcp"))!!
+
+        assertFalse(verdict.reconstructionError.isNaN())
+        assertEquals(1.5986123f, verdict.reconstructionError, 1e-4f)
     }
 
     @Test
     fun `a missing numeric feature counts as raw zero`() {
-        // src_byte_count absent -> 0.0; standardized [1.0, 0.0] -> squared errors 1 and 0 -> mean 0.5.
-        val verdict = OnDeviceAutoencoder(forcedZeroNumericHeadModel("mean"))
-            .evaluate(mapOf("dst_port" to (Math.E - 1).toFloat()), mapOf("proto" to "tcp", "state" to "FIN"))
+        // src_byte_count absent -> 0 -> sqrt 0 -> same as the clamped case above
+        val verdict = OnDeviceAutoencoder(model(numericHead = zeroNumericHead, protoBias = uniformProto))
+            .evaluate(mapOf("dst_port" to (Math.E - 1).toFloat()), mapOf("proto" to "udp"))!!
 
-        assertEquals(0.5f + 2.1972246f, verdict.reconstructionError, 1e-4f)
+        assertEquals(1.5986123f, verdict.reconstructionError, 1e-4f)
+    }
+
+    @Test
+    fun `mean reduction averages the numeric squared errors while sum reduction adds them`() {
+        val mean = OnDeviceAutoencoder(model(reduction = "mean", numericHead = zeroNumericHead, protoBias = uniformProto))
+            .evaluate(numerics, mapOf("proto" to "tcp"))!!
+        val sum = OnDeviceAutoencoder(model(reduction = "sum", numericHead = zeroNumericHead, protoBias = uniformProto))
+            .evaluate(numerics, mapOf("proto" to "tcp"))!!
+
+        assertEquals(3.5986123f, mean.reconstructionError, 1e-4f)
+        assertEquals(6.0986123f, sum.reconstructionError, 1e-4f)
     }
 
     @Test
     fun `leaky_relu uses the model's own negative slope`() {
-        // x=1: pre-activation 1-5=-4 -> leaky (slope 0.1) -> -0.4 -> numeric reconstruction -0.4
-        // squared error (1 - (-0.4))^2 = 1.96, plus proto CE over uniform [0,0] = ln(2) -> 2.653147180559945
-        val model = OnDeviceAutoencoder(
+        // x=1 -> sqrt 1 -> pre-activation 1-5=-4 -> leaky (slope 0.1) -> -0.4 -> squared error (1+0.4)^2 = 1.96,
+        // plus proto CE over uniform [0,0] = ln(2) -> 2.653147180559945
+        val autoencoder = OnDeviceAutoencoder(
             """
             {
               "numeric_features": ["src_byte_count"],
               "numeric_mean": [0.0],
               "numeric_std": [1.0],
               "numeric_reduction": "mean",
+              "numeric_transforms": {"src_byte_count": "sqrt"},
               "categorical_features": [ { "name": "proto", "categories": ["tcp", "other"] } ],
-              "reconstruction_threshold": 100.0,
+              "reconstruction_thresholds": {"tcp": 100.0},
               "encoder": [ { "weight": [[1,0,0]], "bias": [-5.0], "activation": "leaky_relu" } ],
               "decoder_trunk": [ { "weight": [[1]], "bias": [0.0], "activation": "linear" } ],
               "decoder_numeric_head": { "weight": [[1]], "bias": [0.0], "activation": "linear" },
@@ -161,103 +154,116 @@ class OnDeviceAutoencoderTest {
             """.trimIndent()
         )
 
-        val verdict = model.evaluate(mapOf("src_byte_count" to 1f), mapOf("proto" to "tcp"))
+        val verdict = autoencoder.evaluate(mapOf("src_byte_count" to 1f), mapOf("proto" to "tcp"))!!
 
         assertEquals(2.6531472f, verdict.reconstructionError, 1e-4f)
     }
 
     @Test
-    fun `an unrecognized numeric reduction or activation is rejected instead of silently miscalibrating`() {
+    fun `an unusable model file is rejected instead of silently miscalibrating`() {
+        assertThrows(IllegalArgumentException::class.java) { OnDeviceAutoencoder(model(reduction = "median")) }
         assertThrows(IllegalArgumentException::class.java) {
-            OnDeviceAutoencoder(forcedZeroNumericHeadModel("median"))
+            OnDeviceAutoencoder(model().replace("\"linear\"", "\"swish\""))
         }
         assertThrows(IllegalArgumentException::class.java) {
-            OnDeviceAutoencoder(forcedZeroNumericHeadModel("mean").replace("\"linear\"", "\"swish\""))
+            OnDeviceAutoencoder(model(transforms = """{"dst_port": "log1p", "src_byte_count": "cbrt"}"""))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            OnDeviceAutoencoder(model(transforms = """{"dst_port": "log1p"}"""))
         }
     }
 
     private val releasedModel: OnDeviceAutoencoder by lazy {
-        val json = javaClass.classLoader!!.getResource("autoencoder_released_v1790704070.json")!!.readText()
+        val json = javaClass.classLoader!!.getResource("autoencoder_released_v1790722998.json")!!.readText()
         OnDeviceAutoencoder(json)
     }
 
-    private fun realRow(
-        port: Float = 0f, sb: Float = 0f, sp: Float = 0f, db: Float = 0f, dp: Float = 0f,
-        dur: Float = 0f, hs: Float = 0f, smean: Float = 0f, dmean: Float = 0f, dttl: Float = 0f
+    private fun flow(
+        port: Float, src: Float, srcPackets: Float, dst: Float, duration: Float, handshake: Float, smean: Float
     ) = mapOf(
-        "dst_port" to port, "src_byte_count" to sb, "src_packet_count" to sp, "dst_byte_count" to db,
-        "dst_packet_count" to dp, "duration_millis" to dur, "handshake_latency_millis" to hs,
-        "smean" to smean, "dmean" to dmean, "dttl" to dttl
+        "dst_port" to port, "src_byte_count" to src, "src_packet_count" to srcPackets, "dst_byte_count" to dst,
+        "duration_millis" to duration, "handshake_latency_millis" to handshake, "smean" to smean
     )
 
-    private fun assertMatchesIndependentComputation(expected: Double, actual: Float) {
-        assertEquals(expected.toFloat(), actual, 2e-5f + 1e-5f * expected.toFloat())
+    private fun assertMatches(expected: Double, actual: Float, delta: Float = 1e-4f) {
+        assertEquals(expected.toFloat(), actual, delta)
     }
 
     @Test
-    fun `released model exposes the ten numeric and two categorical inputs it needs`() {
+    fun `released model wants exactly the seven numeric inputs and proto, in the documented order`() {
         assertEquals(
             listOf(
-                "dst_port", "src_byte_count", "src_packet_count", "dst_byte_count", "dst_packet_count",
-                "duration_millis", "handshake_latency_millis", "smean", "dmean", "dttl"
+                "dst_port", "src_byte_count", "src_packet_count", "dst_byte_count",
+                "duration_millis", "handshake_latency_millis", "smean"
             ),
             releasedModel.numericFeatureNames
         )
-        assertEquals(listOf("proto", "state"), releasedModel.categoricalFeatureNames)
+        assertEquals(listOf("proto"), releasedModel.categoricalFeatureNames)
     }
 
     @Test
-    fun `released model scores a normal-looking flow below its threshold`() {
-        // numpy float64 forward pass on the same model.json: 0.0017262964870170482 (threshold 0.004233994521200657)
+    fun `golden vector - tcp sample is not flagged`() {
         val verdict = releasedModel.evaluate(
-            realRow(53f, 100f, 2f, 200f, 8f, 5f, 0f, 50f, 25f, 0f),
-            mapOf("proto" to "udp", "state" to "INT")
-        )
+            flow(80f, 102123.89269626162f, 1894.6602989194519f, 5167702.0398060735f, 19908.723520133364f, 50.00185966491699f, 53.90089862256793f),
+            mapOf("proto" to "tcp")
+        )!!
 
-        assertMatchesIndependentComputation(0.0017262964870170482, verdict.reconstructionError)
+        assertMatches(0.021474, verdict.reconstructionError)
         assertFalse(verdict.anomalous)
     }
 
     @Test
-    fun `released model flags a flow it reconstructs poorly`() {
-        // numpy: 0.2844894289183018
+    fun `golden vector - udp sample is flagged against the udp threshold`() {
         val verdict = releasedModel.evaluate(
-            realRow(443f, 1200f, 10f, 5000f, 8f, 300f, 20f, 120f, 625f, 252f),
-            mapOf("proto" to "tcp", "state" to "FIN")
-        )
+            flow(44790f, 197483.59723275586f, 340.5582810061172f, 109026.41195575793f, 12103.02585013446f, 0f, 579.8819416439578f),
+            mapOf("proto" to "udp")
+        )!!
 
-        assertMatchesIndependentComputation(0.2844894289183018, verdict.reconstructionError)
+        assertMatches(0.140742, verdict.reconstructionError)
         assertTrue(verdict.anomalous)
     }
 
     @Test
-    fun `released model matches numpy on unknown categories and a wildly out-of-range flow`() {
-        // proto sctp and state XYZ both bucket to other; numpy: 1521.3205029819478
+    fun `golden vector - tcp big upload is flagged`() {
         val verdict = releasedModel.evaluate(
-            realRow(31337f, 900000f, 700f, 20f, 2f, 90000f, 300f, 1285.7f, 10f, 254f),
-            mapOf("proto" to "sctp", "state" to "XYZ")
-        )
+            flow(443f, 40000000f, 30000f, 50000f, 20000f, 30f, 1333.3333333333333f),
+            mapOf("proto" to "tcp")
+        )!!
 
-        assertMatchesIndependentComputation(1521.3205029819478, verdict.reconstructionError)
+        assertMatches(17.171206, verdict.reconstructionError, delta = 1e-3f)
+        assertTrue(verdict.anomalous)
+    }
+
+    @Test
+    fun `released model matches numpy on a small ordinary tcp flow`() {
+        // independent float64 forward pass: 0.0003794095679668202
+        val verdict = releasedModel.evaluate(flow(443f, 1200f, 10f, 5000f, 300f, 20f, 120f), mapOf("proto" to "tcp"))!!
+
+        assertMatches(0.0003794095679668202, verdict.reconstructionError, delta = 2e-5f)
+        assertFalse(verdict.anomalous)
+    }
+
+    @Test
+    fun `released model matches numpy when raw values are negative (clamped at zero)`() {
+        // independent float64 forward pass: 2.0918525500077445
+        val verdict = releasedModel.evaluate(flow(-5f, -100f, 10f, 5000f, 300f, 20f, 120f), mapOf("proto" to "tcp"))!!
+
+        assertMatches(2.0918525500077445, verdict.reconstructionError, delta = 1e-3f)
         assertTrue(verdict.anomalous)
     }
 
     @Test
     fun `released model matches numpy when almost every input is missing`() {
-        // only dst_port=80 present, no categoricals at all; numpy: 16.964874280983516
-        val verdict = releasedModel.evaluate(mapOf("dst_port" to 80f), emptyMap())
+        // only dst_port=53 present; independent float64 forward pass: 0.1827482519345807
+        val verdict = releasedModel.evaluate(mapOf("dst_port" to 53f), mapOf("proto" to "udp"))!!
 
-        assertMatchesIndependentComputation(16.964874280983516, verdict.reconstructionError)
+        assertMatches(0.1827482519345807, verdict.reconstructionError)
+        assertTrue(verdict.anomalous)
     }
 
     @Test
-    fun `released model matches numpy for mixed-case categorical strings`() {
-        // "TCP"/"int" must land on the tcp/INT buckets; numpy: 13.909597414083054
-        val verdict = releasedModel.evaluate(
-            realRow(443f, 500f, 5f, 800f, 4f, 100f, 10f, 100f, 200f, 0f),
-            mapOf("proto" to "TCP", "state" to "int")
-        )
-
-        assertMatchesIndependentComputation(13.909597414083054, verdict.reconstructionError)
+    fun `released model does not score a protocol it was not calibrated on`() {
+        assertNotNull(releasedModel.evaluate(mapOf("dst_port" to 53f), mapOf("proto" to "udp")))
+        assertNull(releasedModel.evaluate(mapOf("dst_port" to 0f), mapOf("proto" to "icmp")))
     }
 }
