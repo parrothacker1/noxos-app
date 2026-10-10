@@ -58,6 +58,35 @@ class QuarantineManagerTest {
     }
 
     @Test
+    fun aFileLargerThanTheScanLimitIsQuarantinedByStreamingItsBytes() = runBlocking {
+        val size = 160L * 1024 * 1024
+        shadowOf(context.contentResolver).registerInputStream(testUri, PatternInputStream(size))
+
+        val quarantined = manager.quarantine(testUri, "huge.bin", "application/octet-stream", "File too large")
+
+        assertTrue(quarantined)
+        val stored = File(File(context.filesDir, "quarantine"), repository.entries.single().storedFileName)
+        assertEquals(size, stored.length())
+        stored.inputStream().use { input ->
+            val head = ByteArray(4)
+            input.read(head)
+            assertEquals(listOf<Byte>(0, 1, 2, 3), head.toList())
+        }
+        stored.delete()
+    }
+
+    @Test
+    fun aCopyThatFailsHalfwayLeavesNoPartialFileNoEntryAndReportsNotQuarantined() = runBlocking {
+        shadowOf(context.contentResolver).registerInputStream(testUri, PatternInputStream(10L * 1024 * 1024, failAfter = 1024 * 1024))
+
+        val quarantined = manager.quarantine(testUri, "broken.bin", null, "File too large")
+
+        assertFalse(quarantined)
+        assertTrue(repository.entries.isEmpty())
+        assertEquals(0, File(context.filesDir, "quarantine").listFiles()?.size ?: 0)
+    }
+
+    @Test
     fun testRestoreDeletesThePrivateFileAndTheQuarantineEntry() = runBlocking {
         val fileContent = "malformed_exif_bytes"
         shadowOf(context.contentResolver).registerInputStream(
@@ -88,6 +117,25 @@ class QuarantineManagerTest {
         assertFalse(staleFile.exists())
         assertTrue(freshFile.exists())
         assertNull(repository.get(staleId))
+    }
+}
+
+class PatternInputStream(private val size: Long, private val failAfter: Long = -1) : java.io.InputStream() {
+    private var position = 0L
+
+    override fun read(): Int {
+        if (position >= size) return -1
+        if (failAfter in 0..position) throw java.io.IOException("simulated read failure")
+        return (position++ % 251).toInt()
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (position >= size) return -1
+        if (failAfter in 0..position) throw java.io.IOException("simulated read failure")
+        val count = minOf(length.toLong(), size - position).toInt()
+        for (i in 0 until count) buffer[offset + i] = ((position + i) % 251).toByte()
+        position += count
+        return count
     }
 }
 

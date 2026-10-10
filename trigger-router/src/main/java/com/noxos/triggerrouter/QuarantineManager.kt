@@ -19,9 +19,16 @@ class QuarantineManager(
         get() = File(context.filesDir, "quarantine").apply { mkdirs() }
 
     suspend fun quarantine(uri: Uri, displayName: String, mimeType: String?, reason: String): Boolean {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return false
+        val input = context.contentResolver.openInputStream(uri) ?: return false
         val storedFileName = "${UUID.randomUUID()}.bin"
-        File(quarantineDir, storedFileName).writeBytes(bytes)
+        val stored = File(quarantineDir, storedFileName)
+        try {
+            input.use { source -> stored.outputStream().use { source.copyTo(it) } }
+        } catch (e: Exception) {
+            stored.delete()
+            Log.w(TAG, "could not copy $displayName into quarantine, leaving the original in place", e)
+            return false
+        }
         try {
             context.contentResolver.delete(uri, null, null)
         } catch (e: Exception) {
@@ -47,7 +54,7 @@ class QuarantineManager(
         }
         val restoredUri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, insertValues) ?: return false
         recentlyRestoredIds.add(ContentUris.parseId(restoredUri))
-        resolver.openOutputStream(restoredUri)?.use { it.write(file.readBytes()) }
+        resolver.openOutputStream(restoredUri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
         resolver.update(restoredUri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
 
         file.delete()

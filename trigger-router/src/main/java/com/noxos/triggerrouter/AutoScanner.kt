@@ -6,6 +6,7 @@ import com.noxos.audit.AuditRepository
 import com.noxos.audit.QuarantineRepository
 import com.noxos.audit.WardenSettingsRepository
 import com.noxos.triggerrouter.vm.MicrodroidVmSessionFactory
+import com.noxos.triggerrouter.vm.VmInstanceDirs
 import kotlinx.coroutines.flow.first
 
 /**
@@ -21,6 +22,10 @@ class AutoScanner(
 ) {
     private val triggerRouter = TriggerRouter(context, auditRepository, MicrodroidVmSessionFactory(), settingsRepository)
     private val quarantineManager = QuarantineManager(context, quarantineRepository)
+
+    init {
+        VmInstanceDirs.of(context).purgeLeftovers()
+    }
 
     suspend fun scan(uri: Uri, filename: String) {
         val result = triggerRouter.scanFile(uri, filename)

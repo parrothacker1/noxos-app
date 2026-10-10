@@ -11,6 +11,8 @@ import java.util.UUID
 
 class MicrodroidVmSession(
     private val context: Context,
+    private val vmm: VirtualMachineManager,
+    private val vmName: String,
     private val vm: VirtualMachine,
     private val payloadReady: CompletableDeferred<Unit>
 ) : VmSession {
@@ -31,6 +33,11 @@ class MicrodroidVmSession(
             vm.stop()
         } catch (e: Exception) {
         }
+        try {
+            vmm.delete(vmName)
+        } catch (e: Exception) {
+        }
+        VmInstanceDirs.of(context).release(vmName)
     }
 }
 
@@ -39,16 +46,24 @@ class MicrodroidVmSessionFactory : VmSessionFactory {
         val vmm = context.getSystemService(VirtualMachineManager::class.java)
             ?: throw IllegalStateException("VirtualMachineManager not supported on this device")
 
+        val instanceDirs = VmInstanceDirs.of(context)
+        instanceDirs.purgeLeftovers()
+
         val config = VirtualMachineConfig.Builder(context)
             .setPayloadBinaryName("libnoxos_payload_stub.so")
             .setProtectedVm(false)
             .setMemoryBytes(512L * 1024 * 1024)
             .build()
 
-        val vmName = "noxos-scan-${UUID.randomUUID()}"
-        val vm = vmm.getOrCreate(vmName, config)
-
+        val vmName = "${VmInstanceDirs.NAME_PREFIX}${UUID.randomUUID()}"
+        instanceDirs.register(vmName)
         val payloadReady = CompletableDeferred<Unit>()
+        val vm = try {
+            vmm.getOrCreate(vmName, config)
+        } catch (e: Exception) {
+            instanceDirs.release(vmName)
+            throw e
+        }
         vm.setCallback(
             context.mainExecutor,
             object : VirtualMachineCallback {
@@ -78,8 +93,13 @@ class MicrodroidVmSessionFactory : VmSessionFactory {
             }
         )
 
-        vm.run()
-
-        return MicrodroidVmSession(context, vm, payloadReady)
+        val session = MicrodroidVmSession(context, vmm, vmName, vm, payloadReady)
+        try {
+            vm.run()
+        } catch (e: Exception) {
+            session.close()
+            throw e
+        }
+        return session
     }
 }
