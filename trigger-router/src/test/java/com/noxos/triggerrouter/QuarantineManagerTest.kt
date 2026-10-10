@@ -72,7 +72,7 @@ class QuarantineManagerTest {
             input.read(head)
             assertEquals(listOf<Byte>(0, 1, 2, 3), head.toList())
         }
-        stored.delete()
+        assertTrue(stored.delete())
     }
 
     @Test
