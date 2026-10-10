@@ -13,7 +13,7 @@ import org.robolectric.annotation.Config
 
 // Two layers of checking: (1) tiny synthetic models with hand-verified numbers that each isolate one mechanism
 // (per-protocol thresholds, log1p/sqrt transforms and clamping, mean vs sum, leaky slope, contract rejection);
-// (2) the real released noxos-inference model (autoencoder-latest, version 1790722998, the MIRAGE-trained first
+// (2) the real released noxos-inference model (autoencoder-latest, version 1791661543, the MIRAGE-trained first
 // gate) on the three golden vectors from ML-AUTOENCODER-CONTRACT.md (tolerance 1e-4) plus extra rows whose
 // expected errors come from an independent float64 numpy forward pass over the same model.json.
 @RunWith(RobolectricTestRunner::class)
@@ -174,7 +174,7 @@ class OnDeviceAutoencoderTest {
     }
 
     private val releasedModel: OnDeviceAutoencoder by lazy {
-        val json = javaClass.classLoader!!.getResource("autoencoder_released_v1790722998.json")!!.readText()
+        val json = javaClass.classLoader!!.getResource("autoencoder_released_v1791661543.json")!!.readText()
         OnDeviceAutoencoder(json)
     }
 
@@ -213,14 +213,14 @@ class OnDeviceAutoencoderTest {
     }
 
     @Test
-    fun `golden vector - udp sample is flagged against the udp threshold`() {
+    fun `golden vector - udp sample is not flagged against the udp threshold 0.429368`() {
         val verdict = releasedModel.evaluate(
             flow(44790f, 197483.59723275586f, 340.5582810061172f, 109026.41195575793f, 12103.02585013446f, 0f, 579.8819416439578f),
             mapOf("proto" to "udp")
         )!!
 
         assertMatches(0.140742, verdict.reconstructionError)
-        assertTrue(verdict.anomalous)
+        assertFalse(verdict.anomalous)
     }
 
     @Test
@@ -258,7 +258,7 @@ class OnDeviceAutoencoderTest {
         val verdict = releasedModel.evaluate(mapOf("dst_port" to 53f), mapOf("proto" to "udp"))!!
 
         assertMatches(0.1827482519345807, verdict.reconstructionError)
-        assertTrue(verdict.anomalous)
+        assertFalse(verdict.anomalous)
     }
 
     @Test
