@@ -213,7 +213,7 @@ class OnDeviceAutoencoderTest {
     }
 
     @Test
-    fun `golden vector - udp sample is not flagged against the udp threshold 0.429368`() {
+    fun `golden vector - udp sample is not flagged against the udp threshold`() {
         val verdict = releasedModel.evaluate(
             flow(44790f, 197483.59723275586f, 340.5582810061172f, 109026.41195575793f, 12103.02585013446f, 0f, 579.8819416439578f),
             mapOf("proto" to "udp")
