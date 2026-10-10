@@ -91,4 +91,44 @@ class OnDeviceNetworkClassifierTest {
 
         assertEquals("block", verdict.verdict)
     }
+
+    @Test
+    fun `unknown top-level and per-node export fields are ignored`() {
+        val extended = OnDeviceNetworkClassifier(
+            """
+            {
+              "base_score": 0.0,
+              "feature_defaults": { "dst_port": 443.0 },
+              "feature_scale": { "dst_port": 19171.1 },
+              "future_field": [1, 2, 3],
+              "trees": [
+                {
+                  "feature": "dst_port", "threshold": 1024, "cover": 1234.5, "default_left": true,
+                  "left":  { "leaf": -2.0, "cover": 600.25 },
+                  "right": { "leaf": 2.0, "cover": 634.25 }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        assertEquals("allow", extended.classify(mapOf("dst_port" to 443f)).verdict)
+        assertEquals("block", extended.classify(mapOf("dst_port" to 50000f)).verdict)
+    }
+
+    @Test
+    fun `the released student with feature_scale and cover parses and classifies`() {
+        val json = javaClass.classLoader!!.getResource("student_released_v1791623396.json")!!.readText()
+        val released = OnDeviceNetworkClassifier(json)
+
+        val verdict = released.classify(
+            mapOf(
+                "dst_port" to 443f, "src_byte_count" to 900f, "src_packet_count" to 10f,
+                "dst_byte_count" to 12000f, "dst_packet_count" to 14f, "duration_millis" to 2000f
+            )
+        )
+
+        assert(verdict.verdict in setOf("allow", "block", "uncertain"))
+        assert(verdict.safetyScore in 0f..1f)
+    }
 }
