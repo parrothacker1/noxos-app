@@ -14,6 +14,14 @@ fun severityOf(event: AuditEvent): AuditSeverity = when {
     else -> AuditSeverity.SAFE
 }
 
+const val NOT_ANALYZED_SUMMARY_PREFIX = "Unrecognized file type"
+
+/** A clean-but-not-inspected file (fail-open for an unsupported type): must not be presented as sanitized or safe. */
+fun isNotAnalyzed(event: AuditEvent): Boolean =
+    event.eventType == AuditEventType.FILE_SCAN &&
+        severityOf(event) == AuditSeverity.SAFE &&
+        event.resultSummary?.startsWith(NOT_ANALYZED_SUMMARY_PREFIX) == true
+
 fun filterAuditEvents(events: List<AuditEvent>, filter: AuditFilter, query: String): List<AuditEvent> {
     val q = query.trim().lowercase()
     return events.filter { event ->

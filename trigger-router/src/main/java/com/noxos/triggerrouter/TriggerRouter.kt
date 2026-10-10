@@ -6,6 +6,7 @@ import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
 import com.noxos.audit.AuditRepository
+import com.noxos.audit.NOT_ANALYZED_SUMMARY_PREFIX
 import com.noxos.audit.WardenSettingsRepository
 import com.noxos.triggerrouter.protocol.VmPayloadProtocol
 import com.noxos.triggerrouter.vm.VmSessionFactory
@@ -130,7 +131,7 @@ class TriggerRouter(
                             }
                             outcome = AuditOutcome.SUCCESS
                             resultSummary = if (metadata.keys == setOf("file_type")) {
-                                "Unrecognized file type (${metadata["file_type"]}) — not analyzed, not flagged"
+                                "$NOT_ANALYZED_SUMMARY_PREFIX (${metadata["file_type"]}) — not analyzed, not flagged"
                             } else {
                                 "Scan completed, no issues found"
                             }

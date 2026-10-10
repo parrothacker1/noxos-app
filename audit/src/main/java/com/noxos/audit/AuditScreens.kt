@@ -165,7 +165,7 @@ fun AuditListItem(event: AuditEvent, onClick: () -> Unit) {
 @Composable
 fun StatusPill(event: AuditEvent) {
     val (label, color) = when (severityOf(event)) {
-        AuditSeverity.SAFE -> "Safe" to MaterialTheme.colorScheme.primary
+        AuditSeverity.SAFE -> (if (isNotAnalyzed(event)) "Not analyzed" else "Safe") to MaterialTheme.colorScheme.primary
         AuditSeverity.FLAGGED -> "Flagged" to MaterialTheme.colorScheme.tertiary
         AuditSeverity.BLOCKED -> "Blocked" to MaterialTheme.colorScheme.error
     }
@@ -261,6 +261,7 @@ private fun SeverityBanner(event: AuditEvent) {
     }
     val title = when {
         severity == AuditSeverity.BLOCKED -> "BLOCKED — HOST ON BLOCKLIST"
+        isNotAnalyzed(event) -> "NOT ANALYZED — NOT FLAGGED"
         severity == AuditSeverity.SAFE && event.eventType == AuditEventType.FILE_SCAN -> "SANITIZED — SAFE TO USE"
         severity == AuditSeverity.SAFE -> "RELAYED — INSPECTED IN ISOLATION"
         event.eventType == AuditEventType.FILE_SCAN -> "FLAGGED — SCAN DID NOT COMPLETE CLEANLY"

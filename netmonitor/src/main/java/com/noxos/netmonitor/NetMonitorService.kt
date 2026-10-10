@@ -11,6 +11,9 @@ import android.util.Log
 import com.noxos.audit.AclKind
 import com.noxos.audit.AclRepository
 import com.noxos.audit.AclState
+import com.noxos.audit.QuarantineModule
+import com.noxos.triggerrouter.AutoScanner
+import com.noxos.triggerrouter.FileArrivalWatcher
 import com.noxos.audit.AuditEvent
 import com.noxos.audit.AuditEventType
 import com.noxos.audit.AuditOutcome
@@ -57,6 +60,7 @@ class NetMonitorService : VpnService() {
     private var aclJob: Job? = null
     private var analysisDispatchJob: Job? = null
     private var autoencoderDispatchJob: Job? = null
+    private var fileArrivalWatcher: FileArrivalWatcher? = null
 
     private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
     private val lastLoggedAt = ConcurrentHashMap<String, Long>()
@@ -75,6 +79,10 @@ class NetMonitorService : VpnService() {
         var settingsRepository: WardenSettingsRepository? = null
 
         val connectionsInspected = MutableStateFlow(0)
+
+        @Volatile
+        var isRunning: Boolean = false
+            private set
 
         val connectionStats = ConcurrentHashMap<String, ConnectionStats>()
 
@@ -178,12 +186,24 @@ class NetMonitorService : VpnService() {
             serviceScope.launch { AutoencoderDispatcher(applicationContext, it, settings).run() }
         }
 
+        // File auto-scan lives with the monitor service, not the activity, so it survives the app being closed.
+        fileArrivalWatcher = if (acl != null && settings != null) {
+            val scanner = AutoScanner(applicationContext, repo, QuarantineModule.create(applicationContext), settings)
+            FileArrivalWatcher(applicationContext, acl) { uri, name ->
+                serviceScope.launch { scanner.scan(uri, name) }
+            }.also { it.start() }
+        } else null
+
         captureJob = serviceScope.launch {
             runCaptureLoop(vpnInterface!!, repo)
         }
+        isRunning = true
     }
 
     private fun stopMonitor() {
+        isRunning = false
+        fileArrivalWatcher?.stop()
+        fileArrivalWatcher = null
         captureJob?.cancel()
         aclJob?.cancel()
         analysisDispatchJob?.cancel()

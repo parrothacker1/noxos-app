@@ -16,6 +16,8 @@ class NetMonitor(
 
     val connectionsInspected: StateFlow<Int> = NetMonitorService.connectionsInspected
 
+    fun isRunning(): Boolean = NetMonitorService.isRunning
+
     fun prepareIntent(context: Context): Intent? {
         return VpnService.prepare(context)
     }

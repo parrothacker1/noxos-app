@@ -1,6 +1,8 @@
 package com.noxos.audit
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AuditListFilteringTest {
@@ -73,5 +75,22 @@ class AuditListFilteringTest {
         val now = 1_700_000_000_000L
         val oneDayMillis = 24L * 60 * 60 * 1000
         assertEquals("Yesterday", dateBucketLabel(now - oneDayMillis, now))
+    }
+    @Test
+    fun `a clean file scan that was not analyzed is identified so it is never shown as sanitized`() {
+        val notAnalyzed = fileEvent.copy(resultSummary = "$NOT_ANALYZED_SUMMARY_PREFIX (png) — not analyzed, not flagged")
+
+        assertTrue(isNotAnalyzed(notAnalyzed))
+    }
+
+    @Test
+    fun `a really analyzed scan, a failure and a network event are not marked not-analyzed`() {
+        val prefix = "$NOT_ANALYZED_SUMMARY_PREFIX (png) — not analyzed, not flagged"
+
+        assertFalse(isNotAnalyzed(fileEvent.copy(resultSummary = "Scan completed, no issues found")))
+        assertFalse(isNotAnalyzed(fileEvent.copy(resultSummary = null)))
+        assertFalse(isNotAnalyzed(fileEvent.copy(outcome = AuditOutcome.FAILURE, resultSummary = prefix)))
+        assertFalse(isNotAnalyzed(fileEvent.copy(flagged = true, resultSummary = prefix)))
+        assertFalse(isNotAnalyzed(flaggedNetworkEvent.copy(flagged = false, resultSummary = prefix)))
     }
 }

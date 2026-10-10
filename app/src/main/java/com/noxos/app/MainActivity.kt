@@ -27,8 +27,8 @@ import com.noxos.audit.*
 import com.noxos.audit.theme.WardenTheme
 import com.noxos.netmonitor.FeatureLog
 import com.noxos.netmonitor.NetMonitor
-import com.noxos.triggerrouter.FileArrivalWatcher
 import com.noxos.triggerrouter.QuarantineManager
+import com.noxos.triggerrouter.ScanNotifications
 import com.noxos.triggerrouter.ScanResult
 import com.noxos.triggerrouter.TriggerRouter
 import com.noxos.triggerrouter.classifier.ModelUpdateManager
@@ -56,7 +56,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var settingsRepository: WardenSettingsRepository
     private lateinit var triggerRouter: TriggerRouter
     private lateinit var netMonitor: NetMonitor
-    private lateinit var fileArrivalWatcher: FileArrivalWatcher
     private lateinit var quarantineManager: QuarantineManager
     private lateinit var modelUpdateManager: ModelUpdateManager
 
@@ -75,7 +74,6 @@ class MainActivity : ComponentActivity() {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             netMonitor.start(this)
-            fileArrivalWatcher.start()
             monitoringActive = true
         }
     }
@@ -89,7 +87,7 @@ class MainActivity : ComponentActivity() {
         settingsRepository = WardenSettingsRepository(applicationContext)
         triggerRouter = TriggerRouter(applicationContext, auditRepository, MicrodroidVmSessionFactory(), settingsRepository)
         netMonitor = NetMonitor(auditRepository, aclRepository, settingsRepository)
-        fileArrivalWatcher = FileArrivalWatcher(applicationContext, aclRepository) { uri, displayName -> handleAutoScan(uri, displayName) }
+        monitoringActive = netMonitor.isRunning()
         quarantineManager = QuarantineManager(applicationContext, quarantineRepository)
         modelUpdateManager = ModelUpdateManager(applicationContext)
 
@@ -190,7 +188,7 @@ class MainActivity : ComponentActivity() {
                         quarantined = quarantineManager.quarantine(uri, filename, mimeType, reason)
                     }
                     if (settingsRepository.scanCompletionAlertsEnabled.first()) {
-                        postScanCompletionNotification(filename, result, quarantined)
+                        ScanNotifications.post(applicationContext, filename, result, quarantined)
                     }
                 }
             }
@@ -212,7 +210,6 @@ class MainActivity : ComponentActivity() {
                             onToggleMonitoring = {
                                 if (monitoringActive) {
                                     netMonitor.stop(this@MainActivity)
-                                    fileArrivalWatcher.stop()
                                     monitoringActive = false
                                 } else {
                                     modelLoadError = null
@@ -227,7 +224,6 @@ class MainActivity : ComponentActivity() {
                                             vpnPermissionLauncher.launch(permIntent)
                                         } else {
                                             netMonitor.start(this@MainActivity)
-                                            fileArrivalWatcher.start()
                                             monitoringActive = true
                                         }
                                     }
@@ -368,54 +364,4 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    override fun onDestroy() {
-        fileArrivalWatcher.stop()
-        super.onDestroy()
-    }
-
-    private fun handleAutoScan(uri: Uri, filename: String) {
-        lifecycleScope.launch {
-            val result = triggerRouter.scanFile(uri, filename)
-            var quarantined = false
-            if (result !is ScanResult.Success) {
-                val reason = when (result) {
-                    is ScanResult.Failure -> result.reason
-                    is ScanResult.Error -> result.message
-                    is ScanResult.Success -> ""
-                }
-                val mimeType = contentResolver.getType(uri)
-                quarantined = quarantineManager.quarantine(uri, filename, mimeType, reason)
-            }
-            if (settingsRepository.scanCompletionAlertsEnabled.first()) {
-                postScanCompletionNotification(filename, result, quarantined)
-            }
-        }
-    }
-
-    private fun postScanCompletionNotification(filename: String, result: ScanResult, quarantined: Boolean = false) {
-        val channelId = "warden_scan_completion"
-        val channel = NotificationChannel(channelId, "Warden Scan Completion", NotificationManager.IMPORTANCE_DEFAULT)
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-
-        val text = when (result) {
-            is ScanResult.Success -> if (result.exifData.metadata.keys == setOf("file_type")) {
-                "Scan complete — type not deeply inspected, not flagged"
-            } else {
-                "Scan complete — sanitized"
-            }
-            is ScanResult.Failure -> if (quarantined) "Quarantined: ${result.reason}" else "Scan flagged: ${result.reason}"
-            is ScanResult.Error -> if (quarantined) "Quarantined: ${result.message}" else "Scan error: ${result.message}"
-        }
-        val advisoryText = (result as? ScanResult.Success)?.advisory?.displayText
-        val notification = Notification.Builder(this, channelId)
-            .setContentTitle(filename)
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setAutoCancel(true)
-            .apply { if (advisoryText != null) setStyle(Notification.BigTextStyle().bigText("$text\n$advisoryText")) }
-            .build()
-        getSystemService(NotificationManager::class.java).notify(filename.hashCode(), notification)
-    }
 }
-

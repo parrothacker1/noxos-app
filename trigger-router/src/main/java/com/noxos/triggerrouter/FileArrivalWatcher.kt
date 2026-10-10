@@ -15,12 +15,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+/**
+ * Decides which MediaStore rows are new. DATE_ADDED has one-second granularity, so "newer than the last
+ * second seen" silently drops a file added in the same second as one already handled (a batch download or
+ * an extraction); instead a row is accepted once per (second, id).
+ */
+internal class NewFileTracker(initialSeenEpochSeconds: Long) {
+    var lastSeenEpochSeconds: Long = initialSeenEpochSeconds
+        private set
+    private val handledAtLastSecond = HashSet<Long>()
+
+    /** Feed rows in DATE_ADDED order. Returns true exactly once for each new (second, id). */
+    fun accept(dateAddedEpochSeconds: Long, id: Long): Boolean {
+        if (dateAddedEpochSeconds < lastSeenEpochSeconds) return false
+        if (dateAddedEpochSeconds > lastSeenEpochSeconds) {
+            lastSeenEpochSeconds = dateAddedEpochSeconds
+            handledAtLastSecond.clear()
+        }
+        return handledAtLastSecond.add(id)
+    }
+}
+
 class FileArrivalWatcher(
     private val context: Context,
     private val aclRepository: AclRepository,
     private val onFileArrived: (Uri, String) -> Unit
 ) {
-    private var lastSeenAddedAtEpochSeconds: Long = System.currentTimeMillis() / 1000
+    private val tracker = NewFileTracker(System.currentTimeMillis() / 1000)
     private var observer: ContentObserver? = null
     private val scope = CoroutineScope(Dispatchers.IO)
 
@@ -48,8 +69,8 @@ class FileArrivalWatcher(
             MediaStore.Downloads.OWNER_PACKAGE_NAME,
             MediaStore.Downloads.DISPLAY_NAME
         )
-        val selection = "${MediaStore.Downloads.DATE_ADDED} > ?"
-        val args = arrayOf(lastSeenAddedAtEpochSeconds.toString())
+        val selection = "${MediaStore.Downloads.DATE_ADDED} >= ?"
+        val args = arrayOf(tracker.lastSeenEpochSeconds.toString())
 
         resolver.query(
             MediaStore.Downloads.EXTERNAL_CONTENT_URI,
@@ -63,8 +84,8 @@ class FileArrivalWatcher(
             val ownerCol = cursor.getColumnIndex(MediaStore.Downloads.OWNER_PACKAGE_NAME)
             val nameCol = cursor.getColumnIndex(MediaStore.Downloads.DISPLAY_NAME)
             while (cursor.moveToNext()) {
-                lastSeenAddedAtEpochSeconds = maxOf(lastSeenAddedAtEpochSeconds, cursor.getLong(dateCol))
                 val id = cursor.getLong(idCol)
+                if (!tracker.accept(cursor.getLong(dateCol), id)) continue
                 val owner = if (ownerCol >= 0) cursor.getString(ownerCol) else null
                 val displayName = (if (nameCol >= 0) cursor.getString(nameCol) else null) ?: "unknown_file"
                 val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
