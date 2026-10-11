@@ -259,18 +259,8 @@ private fun SeverityBanner(event: AuditEvent) {
         AuditSeverity.FLAGGED -> MaterialTheme.colorScheme.tertiary
         AuditSeverity.BLOCKED -> MaterialTheme.colorScheme.error
     }
-    val title = when {
-        severity == AuditSeverity.BLOCKED -> "BLOCKED — HOST ON BLOCKLIST"
-        isNotAnalyzed(event) -> "NOT ANALYZED — NOT FLAGGED"
-        severity == AuditSeverity.SAFE && event.eventType == AuditEventType.FILE_SCAN -> "SANITIZED — SAFE TO USE"
-        severity == AuditSeverity.SAFE -> "RELAYED — INSPECTED IN ISOLATION"
-        event.eventType == AuditEventType.FILE_SCAN -> "FLAGGED — SCAN DID NOT COMPLETE CLEANLY"
-        else -> "FLAGGED"
-    }
-    val message = event.errorMessage ?: event.resultSummary ?: when (event.eventType) {
-        AuditEventType.FILE_SCAN -> "The file ran fully sealed. Nothing on this device was exposed to its contents."
-        AuditEventType.NETWORK_TRAFFIC -> "Observed inside the sealed VM."
-    }
+    val title = bannerTitle(event)
+    val message = event.errorMessage ?: event.resultSummary ?: bannerFallbackMessage(event)
 
     Row(
         modifier = Modifier
@@ -320,7 +310,7 @@ private fun ContainmentTimeline(stepTimingsCsv: String) {
 }
 
 private fun stepLabel(step: String): String = when (step) {
-    "BOOTING" -> "Boot sealed VM"
+    "BOOTING" -> "Boot scan VM"
     "EXECUTING" -> "Execute in isolation"
     "SANITIZING" -> "Sanitize output"
     "DESTROYING" -> "Destroy VM"

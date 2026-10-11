@@ -171,10 +171,17 @@ class TriggerRouter(
 
                 // Advisory only: extra information for a clean APK, never an input to outcome or quarantine.
                 val finalResult = if (result is ScanResult.Success && !advisoryPermissions.isNullOrEmpty()) {
-                    fetchAdvisory(advisoryPermissions)?.let { advisory ->
-                        resultSummary = "${resultSummary ?: "Scan completed"} | Advisory: ${advisory.displayText}"
-                        result.copy(advisory = advisory)
-                    } ?: result
+                    when (val fetched = fetchAdvisory(advisoryPermissions)) {
+                        is AdvisoryResult.Available -> {
+                            resultSummary = "${resultSummary ?: "Scan completed"} | Advisory: ${fetched.advisory.displayText}"
+                            result.copy(advisory = fetched.advisory)
+                        }
+                        is AdvisoryResult.Unavailable -> {
+                            resultSummary = "${resultSummary ?: "Scan completed"} | Advisory unavailable (${fetched.reason})"
+                            result
+                        }
+                        null -> result
+                    }
                 } else {
                     result
                 }
@@ -215,17 +222,17 @@ class TriggerRouter(
         }
     }
 
-    private suspend fun fetchAdvisory(permissions: List<String>): FileAdvisory? {
+    private suspend fun fetchAdvisory(permissions: List<String>): AdvisoryResult? {
         return try {
             if (!settingsRepository.aiFileAnalysisEnabled.first()) return null
             val endpoint = settingsRepository.inferenceEndpointUrl.first().trim()
-            if (endpoint.isBlank()) return null
+            if (endpoint.isBlank()) return AdvisoryResult.Unavailable("server not configured")
             val apiKey = settingsRepository.inferenceApiKey.first()
-            withContext(Dispatchers.IO) { FileAdvisoryClient.request(endpoint, apiKey, permissions) }
+            withContext(Dispatchers.IO) { FileAdvisoryClient.fetch(endpoint, apiKey, permissions) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null
+            AdvisoryResult.Unavailable("advisory request failed")
         }
     }
 

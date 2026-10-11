@@ -44,6 +44,15 @@ class AutoencoderDispatcher(
             val loggingEnabled = settings?.featureLogEnabled?.first() ?: false
             aclRepository.nextAutoencoderBatch(BATCH_SIZE).forEach { entry ->
                 val stats = NetMonitorService.connectionStats[entry.subject]
+                if (stats != null && connectionNeverCompleted(
+                        entry.protocol, stats.tcpLifecycle, stats.handshakeLatencyMillis,
+                        stats.dstPacketCount.get(), System.currentTimeMillis() - stats.firstSeenAtEpochMillis
+                    )
+                ) {
+                    NetMonitorService.connectionStats.remove(entry.subject)
+                    aclRepository.remove(AclKind.NETWORK, entry.subject)
+                    return@forEach
+                }
                 val snapshot = stats?.let { snapshotOf(entry, it, System.currentTimeMillis()) }
                 if (loggingEnabled && snapshot != null) logSnapshot(entry.subject, snapshot)
 

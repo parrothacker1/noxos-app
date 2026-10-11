@@ -22,6 +22,24 @@ fun isNotAnalyzed(event: AuditEvent): Boolean =
         severityOf(event) == AuditSeverity.SAFE &&
         event.resultSummary?.startsWith(NOT_ANALYZED_SUMMARY_PREFIX) == true
 
+fun bannerTitle(event: AuditEvent): String {
+    val severity = severityOf(event)
+    return when {
+        severity == AuditSeverity.BLOCKED -> "BLOCKED — HOST ON BLOCKLIST"
+        isNotAnalyzed(event) -> "NOT ANALYZED — NOT FLAGGED"
+        severity == AuditSeverity.SAFE && event.eventType == AuditEventType.FILE_SCAN -> "SANITIZED — SAFE TO USE"
+        severity == AuditSeverity.SAFE -> "RELAYED — CHECKED"
+        event.eventType == AuditEventType.FILE_SCAN && event.outcome == AuditOutcome.ERROR -> "SCAN DID NOT COMPLETE"
+        event.eventType == AuditEventType.FILE_SCAN && event.outcome == AuditOutcome.FAILURE -> "FLAGGED — ISSUE FOUND IN SCAN"
+        else -> "FLAGGED"
+    }
+}
+
+fun bannerFallbackMessage(event: AuditEvent): String = when (event.eventType) {
+    AuditEventType.FILE_SCAN -> "The file was scanned in a disposable VM."
+    AuditEventType.NETWORK_TRAFFIC -> "Checked by the on-device models."
+}
+
 fun filterAuditEvents(events: List<AuditEvent>, filter: AuditFilter, query: String): List<AuditEvent> {
     val q = query.trim().lowercase()
     return events.filter { event ->

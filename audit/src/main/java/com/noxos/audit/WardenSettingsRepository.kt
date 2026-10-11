@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -27,6 +28,13 @@ class WardenSettingsRepository(private val context: Context) {
         val INFERENCE_API_KEY = stringPreferencesKey("inference_api_key")
         val QUARANTINE_RETENTION_DAYS = intPreferencesKey("quarantine_retention_days")
         val FEATURE_LOG_ENABLED = booleanPreferencesKey("feature_log_enabled")
+        val LAST_FILE_SEEN_EPOCH_SECONDS = longPreferencesKey("last_file_seen_epoch_seconds")
+    }
+
+    val lastFileSeenEpochSeconds: Flow<Long> = context.wardenDataStore.data.map { it[Keys.LAST_FILE_SEEN_EPOCH_SECONDS] ?: 0L }
+
+    suspend fun setLastFileSeenEpochSeconds(seconds: Long) {
+        context.wardenDataStore.edit { it[Keys.LAST_FILE_SEEN_EPOCH_SECONDS] = seconds }
     }
 
     val featureLogEnabled: Flow<Boolean> = context.wardenDataStore.data.map { it[Keys.FEATURE_LOG_ENABLED] ?: false }

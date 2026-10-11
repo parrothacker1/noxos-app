@@ -44,7 +44,7 @@ fun QuarantineScreen(
     ) { innerPadding ->
         Column(modifier = Modifier.fillMaxSize().padding(innerPadding).padding(horizontal = 20.dp)) {
             Text(
-                "Files the scanner found genuinely malformed are held here, out of Downloads, " +
+                "Files the scanner flagged, or could not safely parse, are held here, out of Downloads, " +
                     "instead of being left in place. Restore a file only if you're sure it's safe.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -2,6 +2,22 @@ package com.noxos.netmonitor
 
 enum class TcpLifecycle { SYN_SEEN, ESTABLISHED, FIN, RST }
 
+internal fun connectionNeverCompleted(
+    protocol: String?,
+    tcpLifecycle: TcpLifecycle?,
+    handshakeLatencyMillis: Long?,
+    inboundChunks: Long,
+    ageMillis: Long
+): Boolean {
+    if (protocol?.uppercase() != "TCP") return false
+    if (handshakeLatencyMillis != null || inboundChunks > 0) return false
+    return when (tcpLifecycle) {
+        TcpLifecycle.RST -> true
+        TcpLifecycle.SYN_SEEN -> ageMillis >= TCP_HANDSHAKE_WAIT_MILLIS
+        else -> false
+    }
+}
+
 internal const val TCP_HANDSHAKE_WAIT_MILLIS = 12_000L
 internal const val UDP_NO_REPLY_WAIT_MILLIS = 60_000L
 

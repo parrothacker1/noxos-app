@@ -107,17 +107,49 @@ class TriggerRouterAdvisoryTest {
 
             assertNull(result.advisory)
             assertTrue(server.requests.isEmpty())
+            assertFalse(auditRepository.recordedEvents.single().resultSummary!!.contains("Advisory"))
         }
     }
 
     @Test
-    fun `nothing is sent and nothing breaks when no endpoint is configured`() {
+    fun `nothing is sent and the audit row says the advisory was unavailable when no endpoint is configured`() {
         answer(0, apkJson)
 
         val result = runBlocking { router.scanFile(uri, "app.apk") } as ScanResult.Success
 
         assertNull(result.advisory)
-        assertEquals(AuditOutcome.SUCCESS, auditRepository.recordedEvents.single().outcome)
+        val audit = auditRepository.recordedEvents.single()
+        assertEquals(AuditOutcome.SUCCESS, audit.outcome)
+        assertEquals("Scan completed, no issues found | Advisory unavailable (server not configured)", audit.resultSummary)
+    }
+
+    @Test
+    fun `a rejected key is noted in the audit row without changing the verdict`() {
+        FakeInferenceServer(status = 401, responseBody = "{}").use { server ->
+            configure(server.url)
+            answer(0, apkJson)
+
+            val result = runBlocking { router.scanFile(uri, "app.apk") }
+
+            assertTrue(result is ScanResult.Success)
+            val audit = auditRepository.recordedEvents.single()
+            assertEquals(AuditOutcome.SUCCESS, audit.outcome)
+            assertNull(audit.errorMessage)
+            assertEquals("Scan completed, no issues found | Advisory unavailable (rejected, HTTP 401)", audit.resultSummary)
+        }
+    }
+
+    @Test
+    fun `an unreachable server is noted in the audit row without changing the verdict`() {
+        configure("http://127.0.0.1:1")
+        answer(0, apkJson)
+
+        val result = runBlocking { router.scanFile(uri, "app.apk") }
+
+        assertTrue(result is ScanResult.Success)
+        val audit = auditRepository.recordedEvents.single()
+        assertEquals(AuditOutcome.SUCCESS, audit.outcome)
+        assertEquals("Scan completed, no issues found | Advisory unavailable (server unreachable)", audit.resultSummary)
     }
 
     @Test
@@ -169,7 +201,9 @@ class TriggerRouterAdvisoryTest {
 
             assertTrue(result is ScanResult.Success)
             assertNull((result as ScanResult.Success).advisory)
-            assertEquals(AuditOutcome.SUCCESS, auditRepository.recordedEvents.single().outcome)
+            val audit = auditRepository.recordedEvents.single()
+            assertEquals(AuditOutcome.SUCCESS, audit.outcome)
+            assertEquals("Scan completed, no issues found | Advisory unavailable (server error, HTTP 503)", audit.resultSummary)
         }
     }
 
@@ -182,7 +216,9 @@ class TriggerRouterAdvisoryTest {
             val result = runBlocking { router.scanFile(uri, "app.apk") } as ScanResult.Success
 
             assertNull(result.advisory)
-            assertFalse(auditRepository.recordedEvents.single().resultSummary!!.contains("Advisory"))
+            val summary = auditRepository.recordedEvents.single().resultSummary!!
+            assertFalse(summary.contains("Advisory:"))
+            assertTrue(summary.contains("Advisory unavailable (unusable response)"))
         }
     }
 }

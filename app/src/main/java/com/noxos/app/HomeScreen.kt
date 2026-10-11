@@ -116,7 +116,7 @@ private fun IdleContent(
         Text("Isolated File Scanner", style = MaterialTheme.typography.headlineMedium)
         Spacer(modifier = Modifier.height(10.dp))
         Text(
-            "Untrusted files and flagged traffic run inside a disposable VM, sealed from your device, before anything real comes back.",
+            "New files are scanned inside a disposable VM. Network traffic is checked by on-device models and, if you set one up, an optional server.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -272,7 +272,7 @@ private fun ScanStepRow(label: String, durationMillis: Long?, isCurrent: Boolean
 }
 
 private fun stepLabel(step: ScanStep): String = when (step) {
-    ScanStep.BOOTING -> "Boot sealed VM"
+    ScanStep.BOOTING -> "Boot scan VM"
     ScanStep.EXECUTING -> "Executing in isolation"
     ScanStep.SANITIZING -> "Sanitize result"
     ScanStep.DESTROYING -> "Destroy VM"

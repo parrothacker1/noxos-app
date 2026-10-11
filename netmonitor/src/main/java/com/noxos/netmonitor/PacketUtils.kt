@@ -163,6 +163,9 @@ internal object PacketUtils {
         return "$protoName $srcIp → $dstIp"
     }
 
+    fun isNonFirstFragment(packet: ByteArray, len: Int): Boolean =
+        len >= 8 && (readUShort(packet, 6) and 0x1FFF) != 0
+
     fun destPort(packet: ByteArray, len: Int): Int? {
         if (len < 24) return null
         val protocol = packet[9].toInt() and 0xFF

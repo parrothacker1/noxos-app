@@ -18,6 +18,11 @@ data class FileAdvisory(val verdict: String, val safetyScore: Float?, val reason
     }
 }
 
+sealed class AdvisoryResult {
+    data class Available(val advisory: FileAdvisory) : AdvisoryResult()
+    data class Unavailable(val reason: String) : AdvisoryResult()
+}
+
 object FileAdvisoryClient {
     const val MAX_PERMISSIONS = 2000
     const val MAX_BODY_BYTES = 1024 * 1024
@@ -32,8 +37,11 @@ object FileAdvisoryClient {
     }
 
     /** Returns null on any failure, non-200, or a response that isn't marked advisory: callers must treat that as "no extra information". */
-    fun request(endpoint: String, apiKey: String, permissions: List<String>): FileAdvisory? {
-        val body = buildBody(permissions) ?: return null
+    fun request(endpoint: String, apiKey: String, permissions: List<String>): FileAdvisory? =
+        (fetch(endpoint, apiKey, permissions) as? AdvisoryResult.Available)?.advisory
+
+    fun fetch(endpoint: String, apiKey: String, permissions: List<String>): AdvisoryResult {
+        val body = buildBody(permissions) ?: return AdvisoryResult.Unavailable("no permissions to analyze")
         return try {
             val connection = URL("${endpoint.trim().trimEnd('/')}/analyze/file").openConnection() as HttpURLConnection
             try {
@@ -45,13 +53,19 @@ object FileAdvisoryClient {
                 if (apiKey.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $apiKey")
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
 
-                if (connection.responseCode != 200) return null
-                parse(connection.inputStream.bufferedReader().use { it.readText() })
+                val code = connection.responseCode
+                when {
+                    code == 401 || code == 403 -> AdvisoryResult.Unavailable("rejected, HTTP $code")
+                    code != 200 -> AdvisoryResult.Unavailable("server error, HTTP $code")
+                    else -> parse(connection.inputStream.bufferedReader().use { it.readText() })
+                        ?.let { AdvisoryResult.Available(it) }
+                        ?: AdvisoryResult.Unavailable("unusable response")
+                }
             } finally {
                 connection.disconnect()
             }
         } catch (e: Exception) {
-            null
+            AdvisoryResult.Unavailable("server unreachable")
         }
     }
 

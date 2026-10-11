@@ -9,7 +9,9 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.noxos.audit.AclKind
+import com.noxos.audit.AclModule
 import com.noxos.audit.AclRepository
+import com.noxos.audit.AuditModule
 import com.noxos.audit.AclState
 import com.noxos.audit.QuarantineModule
 import com.noxos.triggerrouter.AutoScanner
@@ -65,6 +67,7 @@ class NetMonitorService : VpnService() {
     private val udpSessions = ConcurrentHashMap<String, DatagramSocket>()
     private val lastLoggedAt = ConcurrentHashMap<String, Long>()
     private val flagAttempted = ConcurrentHashMap.newKeySet<String>()
+    private val nonRelayedLog = NonRelayedLog()
     private val logThrottleMs = 5_000L
     private val udpIdleTimeoutMs = 30_000
 
@@ -138,6 +141,10 @@ class NetMonitorService : VpnService() {
         }
         connectionsInspected.value = 0
 
+        val repo = auditRepository ?: AuditModule.create(applicationContext).also { auditRepository = it }
+        val acl = aclRepository ?: AclModule.create(applicationContext).also { aclRepository = it }
+        val settings = settingsRepository ?: WardenSettingsRepository(applicationContext).also { settingsRepository = it }
+
         val builder = Builder()
             .setSession("Warden Network Monitor")
             .addAddress("10.0.0.1", 32)
@@ -157,48 +164,27 @@ class NetMonitorService : VpnService() {
         vpnInterface = iface
         Log.i(TAG, "tunnel established")
 
-        val repo = auditRepository
-        if (repo == null) {
-            Log.e(TAG, "auditRepository was null at startMonitor(), stopping")
-            stopMonitor()
-            stopSelf()
-            return
+        serviceScope.launch {
+            acl.clearSessionVerdicts(AclKind.NETWORK)
+            acl.resetUnresolved(AclKind.NETWORK)
         }
 
-        aclRepository?.let { acl ->
-            serviceScope.launch {
-                acl.clearSessionVerdicts(AclKind.NETWORK)
-                acl.resetUnresolved(AclKind.NETWORK)
+        aclJob = serviceScope.launch {
+            val featureLog = FeatureLog.get(applicationContext)
+            acl.observeKind(AclKind.NETWORK).collect { list ->
+                aclCache = list.associate { it.subject to it.state }
+                flagAttempted.retainAll(aclCache.keys)
+                list.forEach { if (it.state == AclState.BLOCKED) featureLog.markLaterBlocked(it.subject) }
             }
         }
 
-        aclJob = aclRepository?.let { acl ->
-            serviceScope.launch {
-                val featureLog = FeatureLog.get(applicationContext)
-                acl.observeKind(AclKind.NETWORK).collect { list ->
-                    aclCache = list.associate { it.subject to it.state }
-                    flagAttempted.retainAll(aclCache.keys)
-                    list.forEach { if (it.state == AclState.BLOCKED) featureLog.markLaterBlocked(it.subject) }
-                }
-            }
-        }
+        analysisDispatchJob = serviceScope.launch { AnalysisDispatcher(applicationContext, acl, settings).run() }
+        autoencoderDispatchJob = serviceScope.launch { AutoencoderDispatcher(applicationContext, acl, settings).run() }
 
-        val acl = aclRepository
-        val settings = settingsRepository
-        analysisDispatchJob = if (acl != null && settings != null) {
-            serviceScope.launch { AnalysisDispatcher(applicationContext, acl, settings).run() }
-        } else null
-        autoencoderDispatchJob = acl?.let {
-            serviceScope.launch { AutoencoderDispatcher(applicationContext, it, settings).run() }
-        }
-
-        // File auto-scan lives with the monitor service, not the activity, so it survives the app being closed.
-        fileArrivalWatcher = if (acl != null && settings != null) {
-            val scanner = AutoScanner(applicationContext, repo, QuarantineModule.create(applicationContext), settings)
-            FileArrivalWatcher(applicationContext, acl) { uri, name ->
-                serviceScope.launch { scanner.scan(uri, name) }
-            }.also { it.start() }
-        } else null
+        val scanner = AutoScanner(applicationContext, repo, QuarantineModule.create(applicationContext), settings)
+        fileArrivalWatcher = FileArrivalWatcher(applicationContext, acl, settings) { uri, name ->
+            serviceScope.launch { scanner.scan(uri, name) }
+        }.also { it.start() }
 
         captureJob = serviceScope.launch {
             runCaptureLoop(vpnInterface!!, repo)
@@ -218,6 +204,7 @@ class NetMonitorService : VpnService() {
         udpSessions.clear()
         lastLoggedAt.clear()
         flagAttempted.clear()
+        nonRelayedLog.clear()
         connectionStats.clear()
         tcpRelay?.closeAll()
         tcpRelay = null
@@ -276,6 +263,7 @@ class NetMonitorService : VpnService() {
 
             val version = (buf[0].toInt() and 0xF0) shr 4
             if (version != 4) continue
+            if (PacketUtils.isNonFirstFragment(buf, len)) continue
 
             val descriptor = PacketUtils.extractFlowDescriptor(buf, len)
             val protocol = buf[9].toInt() and 0xFF
@@ -312,7 +300,14 @@ class NetMonitorService : VpnService() {
                 else -> false
             }
 
-            if (descriptor != null) {
+            if (descriptor != null && !forwarded && protocol != 6 && protocol != 17) {
+                if (nonRelayedLog.firstTime(protocol, dstIpStr)) {
+                    logFlow(
+                        descriptor, repo, AuditOutcome.SUCCESS,
+                        flagged = true, resultSummary = "not relayed", remoteHost = dstIpStr, notify = false
+                    )
+                }
+            } else if (descriptor != null) {
                 val summary = when {
                     forwarded && protocol == 6 -> "relayed (tcp)"
                     forwarded -> "relayed"
@@ -401,7 +396,8 @@ class NetMonitorService : VpnService() {
         outcome: AuditOutcome,
         flagged: Boolean,
         resultSummary: String,
-        remoteHost: String
+        remoteHost: String,
+        notify: Boolean = true
     ) {
         val now = System.currentTimeMillis()
         val last = lastLoggedAt[descriptor]
@@ -424,7 +420,7 @@ class NetMonitorService : VpnService() {
         connectionsInspected.value += 1
 
         val alertsEnabled = settingsRepository?.flaggedEventAlertsEnabled?.first() ?: true
-        if (flagged && alertsEnabled) {
+        if (flagged && alertsEnabled && notify) {
             notifyFlaggedEvent(descriptor, resultSummary)
         }
     }
