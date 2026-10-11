@@ -7,7 +7,7 @@ import org.junit.Test
 
 class CatchUpTest {
 
-    private val now = 1_000_000L
+    private val now = 100_000_000L
 
     private fun file(id: Long, date: Long) = ArrivedFile(id, date, null, "f$id")
 

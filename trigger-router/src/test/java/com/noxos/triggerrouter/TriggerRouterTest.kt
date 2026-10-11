@@ -298,7 +298,10 @@ class TriggerRouterTest {
         assertEquals("true", metadata["apk_debuggable"])
         assertEquals("false", metadata["apk_shared_user_id"])
         assertFalse(metadata.containsKey("permissions"))
-        assertEquals("Scan completed, no issues found", auditRepository.recordedEvents.single().resultSummary)
+        assertEquals(
+            "Scan completed, no issues found | Advisory unavailable (server not configured)",
+            auditRepository.recordedEvents.single().resultSummary
+        )
     }
 
     @Test
