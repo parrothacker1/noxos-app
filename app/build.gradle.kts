@@ -12,8 +12,8 @@ android {
         applicationId = "com.noxos.app"
         minSdk = 33
         targetSdk = 35
-        versionCode = 19
-        versionName = "3.3.0"
+        versionCode = 20
+        versionName = "3.3.1"
     }
 
     signingConfigs {
