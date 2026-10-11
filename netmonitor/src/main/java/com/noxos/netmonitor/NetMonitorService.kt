@@ -165,13 +165,19 @@ class NetMonitorService : VpnService() {
             return
         }
 
-        aclRepository?.let { acl -> serviceScope.launch { acl.clearSessionVerdicts(AclKind.NETWORK) } }
+        aclRepository?.let { acl ->
+            serviceScope.launch {
+                acl.clearSessionVerdicts(AclKind.NETWORK)
+                acl.resetUnresolved(AclKind.NETWORK)
+            }
+        }
 
         aclJob = aclRepository?.let { acl ->
             serviceScope.launch {
                 val featureLog = FeatureLog.get(applicationContext)
                 acl.observeKind(AclKind.NETWORK).collect { list ->
                     aclCache = list.associate { it.subject to it.state }
+                    flagAttempted.retainAll(aclCache.keys)
                     list.forEach { if (it.state == AclState.BLOCKED) featureLog.markLaterBlocked(it.subject) }
                 }
             }

@@ -26,6 +26,8 @@ class ModelUpdateManager(
 
     fun hasLocalModel(): Boolean = modelFile.exists()
 
+    fun currentVersion(): Int = if (modelFile.exists()) readMeta().version else 0
+
     fun loadCurrentModelJson(): String? = if (modelFile.exists()) modelFile.readText() else null
 
     suspend fun ensureModelLoaded(): Boolean = withContext(Dispatchers.IO) {

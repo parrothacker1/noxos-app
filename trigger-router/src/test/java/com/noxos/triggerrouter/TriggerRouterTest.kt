@@ -277,6 +277,45 @@ class TriggerRouterTest {
         assertTrue(audit.resultSummary!!.contains("Unrecognized file type"))
         assertTrue(audit.resultSummary!!.contains("unknown"))
     }
+
+    @Test
+    fun testScanFileToleratesTheAdditiveV106ApkKeysWithNumbersAndBooleans() = runBlocking {
+        shadowOf(context.contentResolver).registerInputStream(testUri, ByteArrayInputStream("apk".toByteArray()))
+        transport.bytesToReceive = response(
+            0,
+            """{"file_type":"apk","zip_entries":812,"apk_signing":"v2","permission_strings":3,"high_risk_permissions":0,
+            "permissions":["android.permission.INTERNET","android.permission.CAMERA"],"dex_version":"035","dex_entropy":6.1234,
+            "dex_count":3,"apk_target_sdk":34,"apk_min_sdk":24,"apk_shared_user_id":false,"apk_shared_user_id_privileged":false,
+            "apk_debuggable":true,"future_object":{"a":1},"future_list":[1,2]}"""
+        )
+
+        val result = router.scanFile(testUri, "app.apk")
+
+        assertTrue(result is ScanResult.Success)
+        val metadata = (result as ScanResult.Success).exifData.metadata
+        assertEquals("3", metadata["dex_count"])
+        assertEquals("34", metadata["apk_target_sdk"])
+        assertEquals("true", metadata["apk_debuggable"])
+        assertEquals("false", metadata["apk_shared_user_id"])
+        assertFalse(metadata.containsKey("permissions"))
+        assertEquals("Scan completed, no issues found", auditRepository.recordedEvents.single().resultSummary)
+    }
+
+    @Test
+    fun testScanFileStillFlagsAV106ApkWhenTheGuestFlagsItAlongsideTheNewKeys() = runBlocking {
+        shadowOf(context.contentResolver).registerInputStream(testUri, ByteArrayInputStream("apk".toByteArray()))
+        transport.bytesToReceive = response(
+            0,
+            """{"file_type":"apk","dex_count":2,"apk_shared_user_id":true,"apk_shared_user_id_privileged":true,
+            "cheap_filter_flagged":true,"cheap_filter_reason":"APK requests a privileged sharedUserId"}"""
+        )
+
+        val result = router.scanFile(testUri, "app.apk")
+
+        assertTrue(result is ScanResult.Failure)
+        assertEquals("APK requests a privileged sharedUserId", (result as ScanResult.Failure).reason)
+        assertEquals(AuditOutcome.FAILURE, auditRepository.recordedEvents.single().outcome)
+    }
 }
 
 class FakeAuditRepository : AuditRepository {

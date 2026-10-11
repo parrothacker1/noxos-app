@@ -29,6 +29,12 @@ interface AclDao {
     @Query("DELETE FROM acl_entries WHERE kind = :kind AND sessionOnly = 1")
     suspend fun deleteSessionOnly(kind: AclKind)
 
+    @Query("DELETE FROM acl_entries WHERE kind = :kind AND state = 'FLAGGED' AND sessionOnly = 0")
+    suspend fun deleteUnresolved(kind: AclKind)
+
+    @Query("DELETE FROM acl_entries WHERE kind = :kind AND sessionOnly = 1 AND reason LIKE 'autoencoder:%'")
+    suspend fun deleteAutoencoderVerdicts(kind: AclKind)
+
     @Query("UPDATE acl_entries SET state = 'BLOCKED', sessionOnly = 1, reason = :reason, updatedAtEpochMillis = :updatedAtEpochMillis WHERE kind = :kind AND subject = :subject")
     suspend fun markAutoencoderFlagged(kind: AclKind, subject: String, reason: String, updatedAtEpochMillis: Long)
 

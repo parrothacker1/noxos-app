@@ -18,7 +18,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 
@@ -26,7 +28,9 @@ class TriggerRouter(
     private val context: Context,
     private val auditRepository: AuditRepository,
     private val vmSessionFactory: VmSessionFactory,
-    private val settingsRepository: WardenSettingsRepository
+    private val settingsRepository: WardenSettingsRepository,
+    private val vmSlots: Semaphore = SHARED_VM_SLOTS,
+    private val queueWaitMillis: Long = QUEUE_WAIT_MILLIS
 ) {
 
     private val _progress = MutableStateFlow(ScanProgress())
@@ -70,7 +74,7 @@ class TriggerRouter(
             val mimeType = context.contentResolver.getType(fileUri) ?: ""
             val metaPrefix = VmPayloadProtocol.encodeFileScanMeta(inputDescriptor, mimeType)
 
-            suspend fun attempt(useDeclaredMeta: Boolean): VmPayloadProtocol.Response = withTimeout(timeoutMillis) {
+            suspend fun runInVm(useDeclaredMeta: Boolean): VmPayloadProtocol.Response = withTimeout(timeoutMillis) {
                 vmSessionFactory.createSession(context).use { session ->
                     enter(ScanStep.BOOTING)
                     var stepStart = System.currentTimeMillis()
@@ -94,6 +98,16 @@ class TriggerRouter(
 
                     stepDurations[ScanStep.EXECUTING] = System.currentTimeMillis() - stepStart
                     VmPayloadProtocol.decodeResponse(responsePayload)
+                }
+            }
+
+            suspend fun attempt(useDeclaredMeta: Boolean): VmPayloadProtocol.Response {
+                val admitted = withTimeoutOrNull(queueWaitMillis) { vmSlots.acquire(); true } ?: false
+                if (!admitted) throw IllegalStateException("Scan queue wait exceeded ${queueWaitMillis / 1000}s (VM slots busy)")
+                try {
+                    return runInVm(useDeclaredMeta)
+                } finally {
+                    vmSlots.release()
                 }
             }
 
@@ -242,5 +256,11 @@ class TriggerRouter(
         } catch (e: Exception) {
             null
         }
+    }
+
+    companion object {
+        const val MAX_CONCURRENT_VMS = 2
+        const val QUEUE_WAIT_MILLIS = 5 * 60 * 1000L
+        val SHARED_VM_SLOTS = Semaphore(MAX_CONCURRENT_VMS)
     }
 }

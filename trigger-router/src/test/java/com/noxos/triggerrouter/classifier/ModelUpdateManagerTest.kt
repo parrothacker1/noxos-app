@@ -92,6 +92,24 @@ class ModelUpdateManagerTest {
     }
 
     @Test
+    fun `currentVersion is 0 with no model and the downloaded version afterwards`() = runBlocking {
+        val context: Context = ApplicationProvider.getApplicationContext()
+        val modelBytes = """{"base_score":0.0,"trees":[]}""".toByteArray()
+        val modelServer = FakeHttpServer(modelBytes).start()
+        val manifestJson = """{"version":1791661543,"sha256":"${sha256Hex(modelBytes)}","modelUrl":"http://127.0.0.1:${modelServer.port}/model"}"""
+        val manifestServer = FakeHttpServer(manifestJson.toByteArray()).start()
+        val manager = ModelUpdateManager(context, manifestUrl = "http://127.0.0.1:${manifestServer.port}/manifest")
+
+        assertEquals(0, manager.currentVersion())
+        manager.checkForUpdateIfStale()
+
+        assertEquals(1791661543, manager.currentVersion())
+
+        manifestServer.stop()
+        modelServer.stop()
+    }
+
+    @Test
     fun `a checksum mismatch is rejected and no model becomes current`() = runBlocking {
         val context: Context = ApplicationProvider.getApplicationContext()
         val corruptModelBytes = """{"tampered":true}""".toByteArray()

@@ -20,6 +20,7 @@ class AutoencoderDispatcher(
 ) {
     private val featureLog = FeatureLog.get(context)
     private val loggedThisRun = HashSet<String>()
+    private var scoredWithVersion: Int? = null
 
     private class Snapshot(val flow: AclEntry, val state: String?, val ageMillis: Long)
 
@@ -33,6 +34,12 @@ class AutoencoderDispatcher(
         while (true) {
             // Nothing else downloads this model: fetch it as soon as it is missing, then refresh daily.
             if (modelUpdateManager.hasLocalModel()) modelUpdateManager.checkForUpdateIfStale() else modelUpdateManager.ensureModelLoaded()
+
+            val modelVersion = modelUpdateManager.currentVersion()
+            if (scoredWithVersion != null && scoredWithVersion != modelVersion) {
+                aclRepository.resetAutoencoderVerdicts(AclKind.NETWORK)
+            }
+            scoredWithVersion = modelVersion
 
             val loggingEnabled = settings?.featureLogEnabled?.first() ?: false
             aclRepository.nextAutoencoderBatch(BATCH_SIZE).forEach { entry ->

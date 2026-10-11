@@ -52,6 +52,10 @@ interface AclRepository {
     suspend fun seedDefaults()
 
     suspend fun clearSessionVerdicts(kind: AclKind)
+
+    suspend fun resetUnresolved(kind: AclKind)
+
+    suspend fun resetAutoencoderVerdicts(kind: AclKind)
 }
 
 class RoomAclRepository(private val dao: AclDao) : AclRepository {
@@ -123,6 +127,14 @@ class RoomAclRepository(private val dao: AclDao) : AclRepository {
 
     override suspend fun clearSessionVerdicts(kind: AclKind) {
         dao.deleteSessionOnly(kind)
+    }
+
+    override suspend fun resetUnresolved(kind: AclKind) {
+        dao.deleteUnresolved(kind)
+    }
+
+    override suspend fun resetAutoencoderVerdicts(kind: AclKind) {
+        dao.deleteAutoencoderVerdicts(kind)
     }
 
     private fun AclEntity.toEntry() = AclEntry(

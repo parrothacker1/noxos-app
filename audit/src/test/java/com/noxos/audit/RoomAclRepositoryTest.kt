@@ -258,4 +258,64 @@ class RoomAclRepositoryTest {
         assertEquals(1, batch.size)
         assertEquals("fresh", batch.single().subject)
     }
+    private suspend fun states(): Map<String, AclState> =
+        repository.observeKind(AclKind.NETWORK).first().associate { it.subject to it.state }
+
+    @Test
+    fun testResetUnresolvedDropsOnlyPendingFlaggedRowsAndNeverAUserOverrideOrASeededEntry() = runBlocking {
+        repository.seedDefaults()
+        repository.flagIfUnknown(AclKind.NETWORK, "stale-flagged", AclPriority.HIGH, "new destination, pending analysis")
+        repository.block(AclKind.NETWORK, "user-blocked", "blocked manually")
+        repository.allow(AclKind.NETWORK, "user-allowed", "allowed manually")
+        repository.allow(AclKind.NETWORK, "session-allowed", "autoencoder: normal", sessionOnly = true)
+
+        repository.resetUnresolved(AclKind.NETWORK)
+
+        val remaining = states()
+        assertTrue("stale-flagged" !in remaining)
+        assertEquals(AclState.BLOCKED, remaining["user-blocked"])
+        assertEquals(AclState.ALLOWED, remaining["user-allowed"])
+        assertEquals(AclState.ALLOWED, remaining["session-allowed"])
+        assertEquals(AclState.ALLOWED, remaining["8.8.8.8"])
+    }
+
+    @Test
+    fun testResetUnresolvedLeavesOtherKindsAlone() = runBlocking {
+        repository.flagIfUnknown(AclKind.FILE_SOURCE, "some.package", AclPriority.LOW, "pending")
+
+        repository.resetUnresolved(AclKind.NETWORK)
+
+        assertEquals(1, repository.observeKind(AclKind.FILE_SOURCE).first().size)
+    }
+
+    @Test
+    fun testResetAutoencoderVerdictsDropsOldModelVerdictsButKeepsUserOverridesAndStudentVerdicts() = runBlocking {
+        repository.allow(AclKind.NETWORK, "ae-normal", "autoencoder: normal", sessionOnly = true)
+        repository.flagIfUnknown(AclKind.NETWORK, "ae-flagged", AclPriority.LOW, "pending")
+        repository.markAutoencoderFlagged(AclKind.NETWORK, "ae-flagged", "autoencoder: flagged (reconstruction error 0.2), escalating to student")
+        repository.allow(AclKind.NETWORK, "student-allowed", "ai: looks fine", sessionOnly = true)
+        repository.block(AclKind.NETWORK, "user-blocked", "autoencoder: flagged (user kept it blocked)")
+        repository.allow(AclKind.NETWORK, "user-allowed", "allowed manually")
+
+        repository.resetAutoencoderVerdicts(AclKind.NETWORK)
+
+        val remaining = states()
+        assertTrue("ae-normal" !in remaining)
+        assertTrue("ae-flagged" !in remaining)
+        assertEquals(AclState.ALLOWED, remaining["student-allowed"])
+        assertEquals(AclState.BLOCKED, remaining["user-blocked"])
+        assertEquals(AclState.ALLOWED, remaining["user-allowed"])
+    }
+
+    @Test
+    fun testAUserOverrideOnAnAutoencoderFlaggedDestinationSurvivesAReset() = runBlocking {
+        repository.flagIfUnknown(AclKind.NETWORK, "9.9.9.11", AclPriority.LOW, "pending")
+        repository.markAutoencoderFlagged(AclKind.NETWORK, "9.9.9.11", "autoencoder: flagged (reconstruction error 0.25), escalating to student")
+        repository.allow(AclKind.NETWORK, "9.9.9.11", "allowed manually")
+
+        repository.resetAutoencoderVerdicts(AclKind.NETWORK)
+        repository.resetUnresolved(AclKind.NETWORK)
+
+        assertEquals(AclState.ALLOWED, states()["9.9.9.11"])
+    }
 }
